@@ -1,5 +1,8 @@
 # Quill-IDE for Godot
 
+<img width="1280" height="720" alt="s1" src="https://github.com/user-attachments/assets/03a0adfb-3f50-4186-a89b-b4eaef1e9f30" />
+
+
 A modern, feature-rich script editor for the **Godot Engine (4.4+)**.  
 Quill IDE is a heavily modified fork of the original **Script-IDE plugin** by **Marius Hanl**, rebuilt for style, usability, and modularity.  
 
@@ -22,10 +25,6 @@ Think of it as **Godot's Script Editor — but sleeker and way more customizable
   - Auto-syncs with FileSystem dock.  
   - Restores state when disabling the plugin.  
   - Clean separation into modular scripts.  
-
----
-
-## 📸 Screenshots
 
 ---
 
