@@ -8,6 +8,8 @@ Quill IDE is a heavily modified fork of the original **Script-IDE plugin** by **
 
 Think of it as **Godot's Script Editor — but sleeker and way more customizable.**
 
+**IMPORTANT**: This was made with PassiveStar's [Minimal Theme](https://github.com/passivestar/godot-minimal-theme) in mind, this might not look good on Godot's Default theme. But with a bit of tinkering you can make it look good with default theme.
+
 ---
 
 ## 🚀 Features
