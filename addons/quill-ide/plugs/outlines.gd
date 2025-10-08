@@ -29,10 +29,10 @@ var outline_cache: OutlineCache
 var keywords: Dictionary[String, bool] = {}
 var old_script_type: StringName
 
-var settings_manager: SettingsManager
+var settings_manager: QuillSettingsManager
 var icon_manager: IconManager
 
-func init(settings_mgr: SettingsManager, icon_mgr: IconManager):
+func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	settings_manager = settings_mgr
 	icon_manager = icon_mgr
 	
@@ -177,15 +177,7 @@ func for_each_script_member(script: Script, consumer: Callable):
 			if func_name.begins_with(INLINE):
 				continue
 			consumer.call(outline_cache.funcs, func_name)
-	
-	var cls_name: String = script.get_instance_base_type()
-	var methods_list: Array = ClassDB.class_get_method_list(cls_name)
-	for method_dict in methods_list:
-		var name: String = method_dict[&"name"]
-		var flags: int = method_dict[&"flags"]
-		if flags & METHOD_FLAG_STATIC != 0 and not outline_cache.funcs.has(name):
-			consumer.call(outline_cache.funcs, name)
-	
+		
 	for dict in script.get_script_property_list():
 		var property_name: String = dict[&"name"]
 		if settings_manager.hide_private_members and property_name.begins_with(UNDERSCORE):

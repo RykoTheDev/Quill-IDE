@@ -1,12 +1,12 @@
 @tool
 extends EditorPlugin
 
-const SettingsManager = preload("uid://cuc2uwqgbhjmi")
+const QuillSettingsManager = preload("uid://cuc2uwqgbhjmi")
 const TabManager = preload("uid://rcrd4dy7nevv")
 const OutlineManager = preload("uid://p1uc0k4gy6jr")
 const IconManager = preload("uid://dqgi3yvglh3w4")
 
-var settings_manager: SettingsManager
+var settings_manager: QuillSettingsManager
 var tab_manager: TabManager
 var outline_manager: OutlineManager
 var icon_manager: IconManager
@@ -15,7 +15,7 @@ func _enter_tree() -> void:
 	icon_manager = IconManager.new()
 	icon_manager.init_icons()
 	
-	settings_manager = SettingsManager.new()
+	settings_manager = QuillSettingsManager.new()
 	settings_manager.init_settings()
 	
 	tab_manager = TabManager.new()

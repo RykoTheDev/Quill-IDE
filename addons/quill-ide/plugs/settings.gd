@@ -1,5 +1,5 @@
 @tool
-class_name SettingsManager
+class_name QuillSettingsManager
 
 const GODOT_IDE: StringName = &"Quill/"
 

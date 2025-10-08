@@ -16,12 +16,12 @@ var file_to_navigate: String = &""
 var tab_state: TabStateCache
 var old_script_editor_base: ScriptEditorBase
 
-var settings_manager: SettingsManager
+var settings_manager: QuillSettingsManager
 var icon_manager: IconManager
 
 signal script_tab_changed(script: Script)
 
-func init(settings_mgr: SettingsManager, icon_mgr: IconManager):
+func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	settings_manager = settings_mgr
 	icon_manager = icon_mgr
 	
@@ -156,7 +156,7 @@ func _customize_tabbar(tab_bar: TabBar) -> void:
 
 	tab_bar.add_theme_font_size_override("font_size", 15)
 
-func handle_settings_change(changed_settings: PackedStringArray, settings_mgr: SettingsManager):
+func handle_settings_change(changed_settings: PackedStringArray, settings_mgr: QuillSettingsManager):
 	settings_manager = settings_mgr
 	
 	for setting: String in changed_settings:
