@@ -1,5 +1,3 @@
+res://addons/quill-ide/plugin.cfg
 res://addons/quill-ide/plugs/settings.gd
-res://addons/quill-ide/plugs/tabs.gd
-res://addons/quill-ide/plugs/icons.gd
-res://addons/quill-ide/plugs/outlines.gd
 res://addons/quill-ide/plugin.gd
