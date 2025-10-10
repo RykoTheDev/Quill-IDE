@@ -10,6 +10,20 @@ Think of it as **Godot's Script Editor — but sleeker and way more customizable
 
 **IMPORTANT**: This was made with PassiveStar's [Minimal Theme](https://github.com/passivestar/godot-minimal-theme) in mind, this might not look good on Godot's Default theme. But with a bit of tinkering you can make it look good with default theme.
 
+**MY PREFERRED THEME** (This might look different from the Cover Image):
+
+> Editor Settings > Interface > Theme (Advanced Settings Toggle turned on)"
+- Base Color: `#1d222a`
+- Accent Color: `#fd9700`
+- Icon Saturation: `1.5`
+- Corner Radius: `5`
+- Base Spacing: `3`
+- Custom Theme: [Minimal Theme](https://github.com/passivestar/godot-minimal-theme)
+
+
+> Editor Settings > Text Editor > Theme"
+- Color Theme: `One Dark` from [this Repository](https://github.com/godotengine/godot-syntax-themes)
+- Background Color: `#181a20`
 ---
 
 ## 🚀 Features
