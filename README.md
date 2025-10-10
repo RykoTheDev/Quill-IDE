@@ -50,6 +50,10 @@ Think of it as **Godot's Script Editor — but sleeker and way more customizable
 2. In Godot, open **Project → Project Settings → Plugins**.  
 3. Enable **Quill-IDE**.  
 
+<img width="205" height="64" alt="image" src="https://github.com/user-attachments/assets/2db1e2fe-676c-414b-bd64-0334e1195cb2" />
+
+<img width="1186" height="135" alt="image" src="https://github.com/user-attachments/assets/2f5ac6a0-0843-46c7-9dcc-cbfccde113c4" />
+
 That’s it — your script editor now levels up! ⚡
 
 ---
@@ -58,6 +62,9 @@ That’s it — your script editor now levels up! ⚡
 
 Quill IDE integrates with **Editor Settings** so you can tweak behavior:
 All changes apply instantly without restarting the editor.
+
+<img width="885" height="692" alt="image" src="https://github.com/user-attachments/assets/9054506e-280b-481c-b071-b452e22261b2" />
+
 
 ---
 
