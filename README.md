@@ -69,10 +69,13 @@ All changes apply instantly without restarting the editor.
 ---
 
 ## 🤝 Roadmap
-[] Indent Line Guides like VSCode's
-[] Split Scripts Window
-[] JSON Viewer and Editor
-[] More i'll add later when i think of some...
+[X] Indent Line Guides like VSCode's
+
+[X] Split Scripts Window
+
+[X] JSON Viewer and Editor
+
+[X] More i'll add later when i think of some...
 
 ---
 
