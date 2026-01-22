@@ -19,6 +19,9 @@ var old_script_editor_base: ScriptEditorBase
 var settings_manager: QuillSettingsManager
 var icon_manager: IconManager
 
+# Track theme connection
+var theme_changed_connected: bool = false
+
 signal script_tab_changed(script: Script)
 
 func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
@@ -58,6 +61,9 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	
 	panel_container = scripts_item_list.get_parent().get_parent()
 	
+	# Connect to theme changes
+	_connect_theme_changed()
+	
 	update_script_list_visibility()
 	_on_tab_changed(scripts_tab_bar.current_tab)
 	
@@ -67,7 +73,27 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	if not script_editor.script_changed.is_connected(_on_script_modified):
 		script_editor.script_changed.connect(_on_script_modified)
 
+func _connect_theme_changed():
+	if theme_changed_connected:
+		return
+	
+	var editor_settings = EditorInterface.get_editor_settings()
+	if editor_settings and not editor_settings.settings_changed.is_connected(_on_editor_settings_changed):
+		editor_settings.settings_changed.connect(_on_editor_settings_changed)
+		theme_changed_connected = true
+
+func _on_editor_settings_changed():
+	if scripts_tab_bar:
+		_customize_tabbar(scripts_tab_bar)
+
 func cleanup():
+	# Disconnect theme changes
+	if theme_changed_connected:
+		var editor_settings = EditorInterface.get_editor_settings()
+		if editor_settings and editor_settings.settings_changed.is_connected(_on_editor_settings_changed):
+			editor_settings.settings_changed.disconnect(_on_editor_settings_changed)
+		theme_changed_connected = false
+	
 	if old_script_editor_base != null:
 		old_script_editor_base.edited_script_changed.disconnect(_on_script_changed)
 	
@@ -104,7 +130,7 @@ func update_editor():
 	update_tabs()
 	
 	if scripts_tab_bar: _customize_tabbar(scripts_tab_bar)
-
+	
 func _on_active_script_changed(script: Script):
 	update_tabs()
 
@@ -116,19 +142,18 @@ func _customize_tabbar(tab_bar: TabBar) -> void:
 	var editor_settings = EditorInterface.get_editor_settings()
 	
 	var sb_normal := StyleBoxFlat.new()
-	var base_color: Color = editor_settings.get_setting("interface/theme/base_color")
-	var contrast_factor: float = 0.15
+	var base_color: Color = editor_settings.get_setting("text_editor/theme/highlighting/background_color")
 
-	sb_normal.bg_color = base_color.darkened(contrast_factor)
+	sb_normal.bg_color = base_color
 	sb_normal.corner_radius_top_left = 25
 	sb_normal.corner_radius_top_right = 25
 	sb_normal.corner_radius_bottom_right = 25
 	sb_normal.corner_radius_bottom_left = 25
 	
 	# inside padding
-	sb_normal.content_margin_left = 17
-	sb_normal.content_margin_right = 17
-	sb_normal.content_margin_top = 2
+	sb_normal.content_margin_left = 15
+	sb_normal.content_margin_right = 15
+	sb_normal.content_margin_top = 1
 	sb_normal.content_margin_bottom = 8
 	
 	# OUTSIDE padding

@@ -2,6 +2,8 @@
 
 <img width="1280" height="720" alt="s1" src="https://github.com/user-attachments/assets/03a0adfb-3f50-4186-a89b-b4eaef1e9f30" />
 
+## Tested on:
+	Godot 4.6 RC2
 
 A modern, feature-rich script editor for the **Godot Engine (4.4+)**.  
 Quill IDE is a heavily modified fork of the original **Script-IDE plugin** by **Marius Hanl**, rebuilt for style, usability, and modularity.  
@@ -12,6 +14,7 @@ Think of it as **Godot's Script Editor — but sleeker and way more customizable
 
 **MY PREFERRED THEME** (This might look different from the Cover Image):
 
+>> Note: As of Godot 4.6 You don't need to add Minimal theme as this was integerated inside godot itself.
 > Editor Settings > Interface > Theme (Advanced Settings Toggle turned on)"
 - Base Color: `#1d222a`
 - Accent Color: `#fd9700`
@@ -57,6 +60,12 @@ Think of it as **Godot's Script Editor — but sleeker and way more customizable
 That’s it — your script editor now levels up! ⚡
 
 ---
+
+## 🚀 Known Bugs
+1. Changing theme color bugs the Tab themeing so after changing, Disable and then Re-enable the plugin.
+2. Script naming sometimes bugs out when closing multiple scripts, Pressing Ctrl + S fixes it.
+
+[Please let me know if you find any other bug]
 
 ## ⚙️ Settings
 

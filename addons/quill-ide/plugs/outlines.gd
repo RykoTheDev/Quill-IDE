@@ -114,7 +114,6 @@ func _on_editor_settings_changed():
 	update_outline_cache()
 	update_outline()
 
-
 func _on_active_script_changed(script: Script):
 	update_outline_cache()
 	update_outline()
@@ -469,7 +468,6 @@ func _scroll_to_bottom():
 	code_edit.set_caret_column(lines[last_index].length())
 	code_edit.set_h_scroll(0)
 	code_edit.grab_focus()
-
 
 func find_or_null(arr: Array[Node], index: int = 0) -> Node:
 	if arr.is_empty():
