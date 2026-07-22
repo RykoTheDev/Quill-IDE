@@ -18,9 +18,9 @@ var old_script_editor_base: ScriptEditorBase
 
 var settings_manager: QuillSettingsManager
 var icon_manager: IconManager
+var left_side_panel: Control
 
-# Track theme connection
-var theme_changed_connected: bool = false
+var _closing_tabs: bool = false
 
 signal script_tab_changed(script: Script)
 
@@ -29,6 +29,8 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	icon_manager = icon_mgr
 	
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
+	var split_container = find_or_null(script_editor.find_children("*", "HSplitContainer", true, false))
+	left_side_panel = split_container.get_child(0)
 	
 	scripts_item_list = find_or_null(script_editor.find_children("*", "ItemList", true, false))
 	scripts_item_list.allow_reselect = true
@@ -61,10 +63,8 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	
 	panel_container = scripts_item_list.get_parent().get_parent()
 	
-	# Connect to theme changes
-	_connect_theme_changed()
-	
 	update_script_list_visibility()
+	_update_minimalism()
 	_on_tab_changed(scripts_tab_bar.current_tab)
 	
 	if not script_editor.editor_script_changed.is_connected(_on_active_script_changed):
@@ -73,27 +73,7 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	if not script_editor.script_changed.is_connected(_on_script_modified):
 		script_editor.script_changed.connect(_on_script_modified)
 
-func _connect_theme_changed():
-	if theme_changed_connected:
-		return
-	
-	var editor_settings = EditorInterface.get_editor_settings()
-	if editor_settings and not editor_settings.settings_changed.is_connected(_on_editor_settings_changed):
-		editor_settings.settings_changed.connect(_on_editor_settings_changed)
-		theme_changed_connected = true
-
-func _on_editor_settings_changed():
-	if scripts_tab_bar:
-		_customize_tabbar(scripts_tab_bar)
-
 func cleanup():
-	# Disconnect theme changes
-	if theme_changed_connected:
-		var editor_settings = EditorInterface.get_editor_settings()
-		if editor_settings and editor_settings.settings_changed.is_connected(_on_editor_settings_changed):
-			editor_settings.settings_changed.disconnect(_on_editor_settings_changed)
-		theme_changed_connected = false
-	
 	if old_script_editor_base != null:
 		old_script_editor_base.edited_script_changed.disconnect(_on_script_changed)
 	
@@ -114,6 +94,10 @@ func cleanup():
 		
 		if script_filter_txt != null:
 			script_filter_txt.gui_input.disconnect(_on_script_filter_input)
+	
+	# Restore the left side panel visibility in case minimalism was active
+	if left_side_panel:
+		left_side_panel.visible = true
 
 func update_editor():
 	update_script_text_filter()
@@ -130,30 +114,43 @@ func update_editor():
 	update_tabs()
 	
 	if scripts_tab_bar: _customize_tabbar(scripts_tab_bar)
-	
+
 func _on_active_script_changed(script: Script):
+	# Auto-close all previously opened scripts when a new one is opened.
+	# Uses call_deferred so the new tab is fully settled before we
+	# start closing others — prevents index mismatch between the
+	# scripts_item_list and the tab container.
+	if settings_manager and settings_manager.is_auto_close_scripts and not _closing_tabs:
+		_closing_tabs = true
+		call_deferred("_close_other_tabs_deferred")
+	
 	update_tabs()
+
+func _close_other_tabs_deferred():
+	_close_all_except(scripts_tab_bar.current_tab)
+	_closing_tabs = false
 
 func _on_script_modified(script: Script):
 	if script == EditorInterface.get_script_editor().get_current_script():
 		update_tabs()
 
 func _customize_tabbar(tab_bar: TabBar) -> void:
-	var editor_settings = EditorInterface.get_editor_settings()
+	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
 	
-	var sb_normal := StyleBoxFlat.new()
-	var base_color: Color = editor_settings.get_setting("text_editor/theme/highlighting/background_color")
+	var sb_normal: StyleBoxFlat = StyleBoxFlat.new()
+	var base_color: Color = editor_settings.get_setting("interface/theme/base_color")
+	var contrast_factor: float = 0.15
 
-	sb_normal.bg_color = base_color
+	sb_normal.bg_color = base_color.darkened(contrast_factor)
 	sb_normal.corner_radius_top_left = 25
 	sb_normal.corner_radius_top_right = 25
 	sb_normal.corner_radius_bottom_right = 25
 	sb_normal.corner_radius_bottom_left = 25
 	
 	# inside padding
-	sb_normal.content_margin_left = 15
-	sb_normal.content_margin_right = 15
-	sb_normal.content_margin_top = 1
+	sb_normal.content_margin_left = 17
+	sb_normal.content_margin_right = 17
+	sb_normal.content_margin_top = 2
 	sb_normal.content_margin_bottom = 8
 	
 	# OUTSIDE padding
@@ -162,11 +159,11 @@ func _customize_tabbar(tab_bar: TabBar) -> void:
 	sb_normal.expand_margin_top = 3
 	sb_normal.expand_margin_bottom = -3
 
-	var sb_hover := sb_normal.duplicate()
+	var sb_hover: StyleBoxFlat = sb_normal.duplicate()
 	sb_hover.bg_color = Color(0.146, 0.167, 0.2)
 
-	var sb_focus := sb_normal.duplicate()
-	var bg_color = editor_settings.get_setting("text_editor/theme/highlighting/background_color")
+	var sb_focus: StyleBoxFlat = sb_normal.duplicate()
+	var bg_color: Color = editor_settings.get_setting("text_editor/theme/highlighting/background_color")
 	sb_focus.bg_color = bg_color
 	
 	sb_focus.corner_radius_top_left = 14
@@ -189,6 +186,25 @@ func handle_settings_change(changed_settings: PackedStringArray, settings_mgr: Q
 			update_script_list_visibility()
 		elif setting == settings_manager.SCRIPT_TABS_VISIBLE:
 			scripts_tab_container.tabs_visible = settings_manager.is_script_tabs_visible
+		elif setting == settings_manager.MINIMALISM:
+			_update_minimalism()
+
+## Updates the entire left side panel + tabs visibility based on
+## the minimalism setting. When minimalism is on, the whole side
+## panel is hidden (script list, filter bar, outline, bookmarks,
+## everything) so only the code editor is visible.
+func _update_minimalism():
+	if not settings_manager or not left_side_panel:
+		return
+	var minimalism: bool = settings_manager.is_minimalism
+	
+	if minimalism:
+		left_side_panel.visible = false
+		scripts_tab_container.tabs_visible = false
+	else:
+		left_side_panel.visible = true
+		update_script_list_visibility()
+		scripts_tab_container.tabs_visible = settings_manager.is_script_tabs_visible
 
 func cycle_tab_forward():
 	var new_tab: int = scripts_tab_container.current_tab + 1
@@ -221,13 +237,13 @@ func update_tab(index: int):
 
 	var script: Script = tab_control.get("script")
 	if script:
-		var name := script.resource_path.get_file()
+		var name: String = script.resource_path.get_file()
 		if name == "":
 			name = script.resource_name
 		if name == "":
 			name = "[Built-in]"
 
-		var icon = icon_manager.get_icon_for_script(script)
+		var icon: Texture2D = icon_manager.get_icon_for_script(script)
 
 		scripts_tab_container.set_tab_title(index, name)
 		scripts_tab_container.set_tab_icon(index, icon)
@@ -270,7 +286,7 @@ func _on_script_filter_input(event: InputEvent):
 
 func _on_tab_changed(index: int):
 	selected_tab = index
-
+	
 	if old_script_editor_base != null:
 		old_script_editor_base.edited_script_changed.disconnect(_on_script_changed)
 		var old_code_edit: CodeEdit = old_script_editor_base.get_base_editor()
@@ -302,7 +318,7 @@ func _on_tab_changed(index: int):
 	else:
 		file_to_navigate = &""
 	
-	var script := script_editor.get_current_script()
+	var script: Script = script_editor.get_current_script()
 	if script:
 		emit_signal("script_tab_changed", script)
 
@@ -324,7 +340,30 @@ func _on_tab_close(tab_idx: int):
 	selected_tab = scripts_tab_bar.current_tab
 	
 	_on_tab_changed(selected_tab)
-	update_tabs()
+	# Defer tab updates to allow the item list to finish processing
+	# the close operation. Otherwise update_tab() may read stale
+	# item list data and assign the wrong name to the next tab.
+	call_deferred("update_tabs")
+
+## Closes all open scripts except the one at [exclude_index].
+## Iterates right-to-left to keep left-side indices stable.
+func _close_all_except(exclude_index: int):
+	var tab_count: int = scripts_tab_container.get_tab_count()
+	if tab_count <= 1:
+		return
+	
+	_closing_tabs = true
+	update_script_text_filter()
+	
+	for i in range(tab_count - 1, -1, -1):
+		if i != exclude_index:
+			simulate_item_clicked(i, MOUSE_BUTTON_MIDDLE)
+			# After closing a tab to the left of the excluded one,
+			# the excluded tab shifts left by one.
+			if i < exclude_index:
+				exclude_index -= 1
+	
+	_closing_tabs = false
 
 func _on_tab_rmb(tab_idx: int):
 	update_script_text_filter()

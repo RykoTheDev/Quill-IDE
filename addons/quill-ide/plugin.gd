@@ -47,14 +47,14 @@ func _process(delta: float) -> void:
 	update_editor()
 	set_process(false)
 
-func schedule_update():
+func schedule_update() -> void:
 	set_process(true)
 
-func update_editor():
+func update_editor() -> void:
 	tab_manager.update_editor()
 	outline_manager.update_editor()
 
-func _on_settings_changed():
+func _on_settings_changed() -> void:
 	var changed_settings: PackedStringArray = EditorInterface.get_editor_settings().get_changed_settings()
 	
 	settings_manager.sync_settings(changed_settings)
@@ -65,7 +65,7 @@ func get_current_script() -> Script:
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
 	return script_editor.get_current_script()
 
-func goto_line(index: int):
+func goto_line(index: int) -> void:
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
 	script_editor.goto_line(index)
 	

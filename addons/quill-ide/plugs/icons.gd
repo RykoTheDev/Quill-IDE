@@ -16,7 +16,7 @@ var scroll_bottom: Texture2D
 const GETTER: StringName = &"get"
 const SETTER: StringName = &"set"
 
-func init_icons():
+func init_icons() -> void:
 	engine_func_icon = create_editor_texture(load_rel("icons/engine_func.svg"))
 	func_icon = create_editor_texture(load_rel("icons/func.svg"))
 	func_get_icon = create_editor_texture(load_rel("icons/func_get.svg"))
@@ -36,13 +36,13 @@ func create_editor_texture(texture: Texture2D) -> Texture2D:
 
 func get_func_icon(func_name: String) -> Texture2D:
 	var icon: Texture2D = func_icon
-	if func_name.begins_with(GETTER):
+	if func_name.begins_with("get"):
 		icon = func_get_icon
-	elif func_name.begins_with(SETTER):
+	elif func_name.begins_with("set"):
 		icon = func_set_icon
 	return icon
 
-func handle_settings_change(changed_settings: PackedStringArray):
+func handle_settings_change(changed_settings: PackedStringArray) -> void:
 	for setting: String in changed_settings:
 		if setting == "interface/theme/icon_saturation":
 			init_icons()
@@ -61,5 +61,5 @@ func get_editor_accent_color() -> Color:
 	return EditorInterface.get_editor_settings().get_setting("interface/theme/accent_color")
 
 func load_rel(path: String) -> Variant:
-	var base_path = "res://addons/quill-ide/"
+	var base_path: String = "res://addons/quill-ide/"
 	return load(base_path.path_join(path))

@@ -13,6 +13,8 @@ const EXPORTED: StringName = &"Exported Properties"
 const PROPERTIES: StringName = &"Properties"
 const CLASSES: StringName = &"Classes"
 const CONSTANTS: StringName = &"Constants"
+const BOOKMARKS: StringName = &"Bookmarks"
+const MAX_BOOKMARKS_HEIGHT: int = 150
 
 var outline_container: Control
 var outline_parent: Control
@@ -24,6 +26,15 @@ var outline_tree: Tree
 var outline_root: TreeItem
 
 var category_items: Dictionary[StringName, TreeItem] = {}
+
+var collapse_button_container: HBoxContainer
+var context_menu: PopupMenu
+
+var bookmarks_container: VBoxContainer
+var bookmarks_tree: Tree
+var bookmarks_root: TreeItem
+var bookmarks_context_menu: PopupMenu
+var bookmarks_remove_all_btn: Button
 
 var outline_cache: OutlineCache
 var keywords: Dictionary[String, bool] = {}
@@ -54,8 +65,17 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	outline_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	outline_tree.hide_root = true
 	outline_tree.allow_reselect = true
+	outline_tree.scroll_horizontal_enabled = true
+	outline_tree.scroll_vertical_enabled = true
 	outline_parent.add_child(outline_tree)
 	outline_tree.item_selected.connect(_on_outline_item_selected)
+	outline_tree.item_collapsed.connect(_on_outline_item_collapsed)
+	outline_tree.gui_input.connect(_on_outline_tree_gui_input)
+	
+	context_menu = PopupMenu.new()
+	outline_tree.add_child(context_menu)
+	context_menu.id_pressed.connect(_on_context_menu_id_pressed)
+	context_menu.set_meta(&"target_item", null)
 	
 	outline_root = outline_tree.create_item()
 	
@@ -72,17 +92,21 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	if not script_editor.script_changed.is_connected(_on_script_modified):
 		script_editor.script_changed.connect(_on_script_modified)
 
+	_add_collapse_buttons()
+	_add_bookmarks_section()
 	_add_scroll_buttons()
+	
+	# Apply initial outline visibility based on settings
+	_update_outline_ui_visibility()
 
 func cleanup():
 	if split_container != null:
 		if split_container != outline_container.get_parent():
 			split_container.add_child(outline_container)
 		
-		if settings_manager.is_outline_right:
-			var split_offset: float = split_container.get_child(1).size.x
-			split_container.split_offset = split_offset
-		
+		# Preserve the current split offset (the left panel width)
+		# before moving the outline back to its original position.
+		# Don't recalculate from child sizes or they'll swap.
 		split_container.move_child(outline_container, 0)
 		
 		if outline_filter_txt:
@@ -92,6 +116,12 @@ func cleanup():
 			sort_btn.pressed.disconnect(update_outline)
 		if outline_tree:
 			outline_tree.item_selected.disconnect(_on_outline_item_selected)
+			outline_tree.item_collapsed.disconnect(_on_outline_item_collapsed)
+			if outline_tree.gui_input.is_connected(_on_outline_tree_gui_input):
+				outline_tree.gui_input.disconnect(_on_outline_tree_gui_input)
+			if context_menu:
+				context_menu.queue_free()
+				context_menu = null
 		
 		if outline_parent and outline_tree:
 			outline_parent.remove_child(outline_tree)
@@ -99,6 +129,12 @@ func cleanup():
 			outline_parent.move_child(old_outline, 2)
 			outline_tree.free()
 			
+		if bookmarks_container:
+			bookmarks_container.queue_free()
+			bookmarks_container = null
+		if collapse_button_container:
+			collapse_button_container.queue_free()
+			collapse_button_container = null
 		if scroll_button_container:
 			scroll_button_container.queue_free()
 			scroll_button_container = null
@@ -106,13 +142,24 @@ func cleanup():
 func update_editor():
 	update_outline_cache()
 	update_outline()
+	_update_bookmarks_ui()
 
 func _on_editor_settings_changed():
+	var old_position: bool = settings_manager.is_outline_right
+	var old_hidden: bool = settings_manager.is_outline_hidden
 	settings_manager.sync_settings_all()
-	if settings_manager.is_outline_right: update_outline_position()
-	else: update_outline_position()
+	# Only reposition the outline when the outline position setting
+	# actually changed — avoid spamming layout updates on every
+	# arbitrary editor setting change.
+	if settings_manager.is_outline_right != old_position:
+		update_outline_position()
+	# Update outline-specific visibility if the hide-outline setting changed
+	if settings_manager.is_outline_hidden != old_hidden:
+		_update_outline_ui_visibility()
 	update_outline_cache()
 	update_outline()
+	_update_bookmarks_ui()
+
 
 func _on_active_script_changed(script: Script):
 	update_outline_cache()
@@ -122,11 +169,13 @@ func _on_script_modified(script: Script):
 	if script == EditorInterface.get_script_editor().get_current_script():
 		update_outline_cache()
 		update_outline()
+		_cleanup_stale_bookmarks()
 
 func update_outline_position():
+	# Just move the child to the desired position. The split_offset
+	# is preserved automatically — don't manually override it,
+	# otherwise it swaps the panel sizes every time this is called.
 	if settings_manager.is_outline_right:
-		var split_offset: float = split_container.get_child(1).size.x
-		split_container.split_offset = split_offset
 		split_container.move_child(outline_container, 1)
 	else:
 		split_container.move_child(outline_container, 0)
@@ -274,12 +323,41 @@ func update_outline():
 			}
 			item_node.set_metadata(0, metadata)
 
+
 func get_category_order(category_name: StringName) -> int:
 	var index = settings_manager.outline_order.find(category_name)
 	return index if index != -1 else 999
 
 func get_category_collapsed_state(category_name: StringName) -> bool:
-	return true
+	return settings_manager.collapsed_categories.has(category_name)
+
+func find_and_goto_line(name: String, type: StringName, modifier: StringName, script: Script) -> void:
+	if not script:
+		return
+	
+	var with_text: String = type + " " + name
+	if type == &"func":
+		with_text += "("
+	
+	var lines: PackedStringArray = script.get_source_code().split("\n")
+	var index: int = 0
+	for line in lines:
+		if line.begins_with(with_text):
+			goto_line(index)
+			return
+		if modifier != &"" and line.begins_with(modifier):
+			if line.begins_with(modifier + " " + with_text):
+				goto_line(index)
+				return
+			elif modifier == &"enum" and line.contains("enum " + name):
+				goto_line(index)
+				return
+		if type == &"var" and line.contains(with_text):
+			goto_line(index)
+			return
+		index += 1
+	
+	push_error(with_text + " or " + modifier + " not found in source code")
 
 func scroll_to_outline_item():
 	var selected_item: TreeItem = outline_tree.get_selected()
@@ -293,33 +371,11 @@ func scroll_to_outline_item():
 		return
 	
 	var text: String = selected_item.get_text(0)
-	var metadata: Dictionary[StringName, StringName] = selected_item.get_metadata(0)
+	var metadata: Dictionary = selected_item.get_metadata(0)
 	var modifier: StringName = metadata[&"modifier"]
 	var type: StringName = metadata[&"type"]
 	
-	var type_with_text: String = type + " " + text
-	if type == &"func":
-		type_with_text += "("
-	
-	var lines: PackedStringArray = script.get_source_code().split("\n")
-	var index: int = 0
-	for line in lines:
-		if line.begins_with(type_with_text):
-			goto_line(index)
-			return
-		if modifier != &"" and line.begins_with(modifier):
-			if line.begins_with(modifier + " " + type_with_text):
-				goto_line(index)
-				return
-			elif modifier == &"enum" and line.contains("enum " + text):
-				goto_line(index)
-				return
-		if type == &"var" and line.contains(type_with_text):
-			goto_line(index)
-			return
-		index += 1
-	
-	push_error(type_with_text + " or " + modifier + " not found in source code")
+	find_and_goto_line(text, type, modifier, script)
 
 func goto_line(index: int):
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
@@ -333,7 +389,340 @@ func goto_line(index: int):
 	code_edit.grab_focus()
 
 func _on_outline_item_selected():
+	var item: TreeItem = outline_tree.get_selected()
+	if not item or not item.get_metadata(0):
+		return
 	scroll_to_outline_item()
+
+func _on_outline_item_collapsed(item: TreeItem):
+	for category_name in category_items.keys():
+		if category_items[category_name] == item:
+			settings_manager.set_category_collapsed(category_name, item.collapsed)
+			break
+
+func _on_outline_tree_gui_input(event: InputEvent):
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		var item: TreeItem = outline_tree.get_item_at_position(event.position)
+		if item and item.get_metadata(0):
+			item.select(0)
+			_show_context_menu(item, event.position)
+
+func _show_context_menu(item: TreeItem, at_position: Vector2):
+	context_menu.clear()
+	
+	var metadata: Dictionary = item.get_metadata(0)
+	var name: String = item.get_text(0)
+	var script: Script = EditorInterface.get_script_editor().get_current_script()
+	var item_icon: Texture2D = item.get_icon(0)
+	
+	# Store target info for the action handler
+	context_menu.set_meta(&"target_item", item)
+	
+	var script_path: String = script.resource_path if script else &""
+	var already_bookmarked: bool = false
+	if not script_path.is_empty():
+		already_bookmarked = settings_manager.is_bookmarked(script_path, name)
+	
+	if already_bookmarked:
+		context_menu.add_icon_item(item_icon, "Remove Bookmark", 0)
+	else:
+		context_menu.add_icon_item(item_icon, "Add Bookmark", 0)
+	
+	context_menu.position = Vector2i(outline_tree.get_screen_position()) + Vector2i(at_position)
+	context_menu.popup()
+
+func _on_context_menu_id_pressed(id: int):
+	var item: TreeItem = context_menu.get_meta(&"target_item")
+	if not item:
+		return
+	
+	var metadata: Dictionary = item.get_metadata(0)
+	var name: String = item.get_text(0)
+	
+	if id == 0:
+		var script: Script = EditorInterface.get_script_editor().get_current_script()
+		if script:
+			var script_path: String = script.resource_path
+			if settings_manager.is_bookmarked(script_path, name):
+				settings_manager.remove_bookmark(script_path, name)
+			else:
+				settings_manager.add_bookmark(
+					script_path,
+					name,
+					metadata[&"type"],
+					metadata.get(&"modifier", &"")
+				)
+		update_outline()
+		_update_bookmarks_ui()
+
+func _on_bookmarks_tree_item_selected():
+	var item: TreeItem = bookmarks_tree.get_selected()
+	if not item or not item.get_metadata(0):
+		return
+	var metadata: Dictionary = item.get_metadata(0)
+	_navigate_to_bookmark(metadata)
+
+func _on_bookmarks_tree_gui_input(event: InputEvent):
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		var item: TreeItem = bookmarks_tree.get_item_at_position(event.position)
+		if item and item.get_metadata(0):
+			item.select(0)
+			_show_bookmarks_context_menu(item, event.position)
+
+func _show_bookmarks_context_menu(item: TreeItem, at_position: Vector2):
+	bookmarks_context_menu.clear()
+	
+	var metadata: Dictionary = item.get_metadata(0)
+	var item_icon: Texture2D = item.get_icon(0)
+	bookmarks_context_menu.set_meta(&"target_item", item)
+	bookmarks_context_menu.add_icon_item(item_icon, "Remove Bookmark", 0)
+	
+	bookmarks_context_menu.position = Vector2i(bookmarks_tree.get_screen_position()) + Vector2i(at_position)
+	bookmarks_context_menu.popup()
+
+func _on_bookmarks_context_menu_id_pressed(id: int):
+	var item: TreeItem = bookmarks_context_menu.get_meta(&"target_item")
+	if not item:
+		return
+	
+	var metadata: Dictionary = item.get_metadata(0)
+	
+	if id == 0:
+		settings_manager.remove_bookmark(
+			metadata[&"script_path"],
+			metadata[&"bookmark_name"]
+		)
+	_update_bookmarks_ui()
+
+func _navigate_to_bookmark(metadata: Dictionary) -> void:
+	var script_path: String = metadata.get(&"script_path", &"")
+	if script_path.is_empty():
+		return
+	var script: Script = load(script_path)
+	if not script:
+		return
+	EditorInterface.edit_resource(script)
+	call_deferred("_navigate_to_bookmark_deferred", metadata)
+
+func _navigate_to_bookmark_deferred(metadata: Dictionary) -> void:
+	var script_path: String = metadata.get(&"script_path", &"")
+	if script_path.is_empty():
+		return
+	var script: Script = load(script_path)
+	find_and_goto_line(
+		metadata.get(&"bookmark_name", &""),
+		metadata.get(&"type", &""),
+		metadata.get(&"modifier", &""),
+		script
+	)
+
+func _add_bookmarks_section():
+	bookmarks_container = VBoxContainer.new()
+	bookmarks_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bookmarks_container.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	bookmarks_container.custom_minimum_size.y = 24
+	
+	# Header row: label + remove all button
+	var header: HBoxContainer = HBoxContainer.new()
+	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.custom_minimum_size.y = 24
+	
+	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
+	var base_color: Color = editor_settings.get_setting("interface/theme/base_color")
+	
+	var header_normal: StyleBoxFlat = StyleBoxFlat.new()
+	header_normal.bg_color = base_color.darkened(0.2)
+	header_normal.corner_radius_top_left = 8
+	header_normal.corner_radius_top_right = 8
+	header_normal.corner_radius_bottom_right = 8
+	header_normal.corner_radius_bottom_left = 8
+	header_normal.expand_margin_top = -2
+	header_normal.expand_margin_bottom = -2
+	header_normal.expand_margin_left = -2
+	header_normal.expand_margin_right = -2
+	
+	var header_hover: StyleBoxFlat = header_normal.duplicate()
+	header_hover.bg_color = base_color.lightened(0.1)
+	
+	var header_focus: StyleBoxFlat = header_normal.duplicate()
+	header_focus.bg_color = base_color.darkened(0.3)
+	
+	var bookmarks_label: Label = Label.new()
+	bookmarks_label.text = BOOKMARKS + " (0)"
+	bookmarks_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bookmarks_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	bookmarks_label.add_theme_font_size_override("font_size", 12)
+	header.add_child(bookmarks_label)
+	
+	var remove_all_btn: Button = Button.new()
+	remove_all_btn.text = "Remove All"
+	remove_all_btn.tooltip_text = "Remove all bookmarks"
+	remove_all_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+	bookmarks_remove_all_btn = remove_all_btn
+	remove_all_btn.pressed.connect(_remove_all_bookmarks)
+	remove_all_btn.custom_minimum_size.x = 80
+	remove_all_btn.add_theme_stylebox_override("hover", header_hover)
+	remove_all_btn.add_theme_stylebox_override("normal", header_normal)
+	remove_all_btn.add_theme_stylebox_override("pressed", header_focus)
+	header.add_child(remove_all_btn)
+	
+	bookmarks_container.add_child(header)
+	
+	# Scroll container for bookmarks list so it scrolls when there are many items
+	var bookmarks_scroll: ScrollContainer = ScrollContainer.new()
+	bookmarks_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bookmarks_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	bookmarks_scroll.custom_minimum_size.y = 0
+	bookmarks_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	bookmarks_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	bookmarks_container.add_child(bookmarks_scroll)
+	
+	# Bookmarks tree
+	bookmarks_tree = Tree.new()
+	bookmarks_tree.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	bookmarks_tree.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bookmarks_tree.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	bookmarks_tree.custom_minimum_size.y = 0
+	bookmarks_tree.hide_root = true
+	bookmarks_tree.allow_reselect = true
+	bookmarks_tree.scroll_horizontal_enabled = false
+	bookmarks_tree.scroll_vertical_enabled = false
+	bookmarks_root = bookmarks_tree.create_item()
+	bookmarks_tree.item_selected.connect(_on_bookmarks_tree_item_selected)
+	bookmarks_tree.gui_input.connect(_on_bookmarks_tree_gui_input)
+	bookmarks_scroll.add_child(bookmarks_tree)
+	
+	# Context menu for bookmarks
+	bookmarks_context_menu = PopupMenu.new()
+	bookmarks_tree.add_child(bookmarks_context_menu)
+	bookmarks_context_menu.id_pressed.connect(_on_bookmarks_context_menu_id_pressed)
+	bookmarks_context_menu.set_meta(&"target_item", null)
+	
+	# Add to outline parent before scroll buttons
+	outline_parent.add_child(bookmarks_container)
+	# Move it right before scroll buttons
+	var scroll_idx: int = outline_parent.get_child_count() - 1
+	outline_parent.move_child(bookmarks_container, scroll_idx)
+	
+	_update_bookmarks_ui()
+
+func _update_bookmarks_ui():
+	if not bookmarks_tree or not bookmarks_root:
+		return
+	
+	bookmarks_tree.clear()
+	bookmarks_root = bookmarks_tree.create_item()
+	
+	var bookmarks_data: Array = settings_manager.bookmarks
+	var count: int = bookmarks_data.size()
+	
+	# Update header label
+	var header: HBoxContainer = bookmarks_container.get_child(0) if bookmarks_container.get_child_count() > 0 else null
+	if header:
+		var label: Label = header.get_child(0)
+		if label:
+			label.text = BOOKMARKS + " (" + str(count) + ")"
+	
+	if count == 0:
+		bookmarks_tree.visible = false
+		bookmarks_container.custom_minimum_size.y = 24
+		bookmarks_remove_all_btn.visible = false
+		return
+	
+	bookmarks_tree.visible = true
+	bookmarks_remove_all_btn.visible = true
+	bookmarks_container.custom_minimum_size.y = MAX_BOOKMARKS_HEIGHT
+	
+	for bookmark in bookmarks_data:
+		var script_filename: String = bookmark[&"script_path"].get_file()
+		var display_text: String = script_filename + " > " + bookmark[&"name"]
+		
+		var bm_item: TreeItem = bookmarks_tree.create_item(bookmarks_root)
+		bm_item.set_text(0, display_text)
+		
+		var item_type: StringName = bookmark.get(&"type", &"func")
+		var item_name: String = bookmark[&"name"]
+		var modifier: StringName = bookmark.get(&"modifier", &"")
+		if item_type == &"func" and item_name.begins_with("get"):
+			bm_item.set_icon(0, icon_manager.func_get_icon)
+		elif item_type == &"func" and item_name.begins_with("set"):
+			bm_item.set_icon(0, icon_manager.func_set_icon)
+		elif item_type == &"func" and keywords.has(item_name):
+			bm_item.set_icon(0, icon_manager.engine_func_icon)
+		else:
+			match item_type:
+				&"signal": bm_item.set_icon(0, icon_manager.signal_icon)
+				&"var":
+					if modifier == &"@export":
+						bm_item.set_icon(0, icon_manager.export_icon)
+					else:
+						bm_item.set_icon(0, icon_manager.property_icon)
+				&"const": bm_item.set_icon(0, icon_manager.constant_icon)
+				&"class": bm_item.set_icon(0, icon_manager.class_icon)
+				_: bm_item.set_icon(0, icon_manager.func_icon)
+		
+		bm_item.set_metadata(0, {
+			&"is_bookmark": true,
+			&"script_path": bookmark[&"script_path"],
+			&"bookmark_name": bookmark[&"name"],
+			&"type": item_type,
+			&"modifier": bookmark.get(&"modifier", &"")
+		})
+
+func _remove_all_bookmarks():
+	settings_manager.clear_all_bookmarks()
+	_update_bookmarks_ui()
+
+func _cleanup_stale_bookmarks() -> void:
+	var script: Script = EditorInterface.get_script_editor().get_current_script()
+	if not script or not outline_cache:
+		return
+	
+	var script_path: String = script.resource_path
+	if script_path.is_empty():
+		return
+	
+	# Collect all existing member names from the current cache
+	var existing: Dictionary = {}
+	for name: String in outline_cache.engine_funcs:
+		existing[name] = true
+	for name: String in outline_cache.funcs:
+		existing[name] = true
+	for name: String in outline_cache.signals:
+		existing[name] = true
+	for name: String in outline_cache.exports:
+		existing[name] = true
+	for name: String in outline_cache.properties:
+		existing[name] = true
+	for name: String in outline_cache.constants:
+		existing[name] = true
+	for name: String in outline_cache.classes:
+		existing[name] = true
+	
+	# Remove any bookmarks for this script whose member no longer exists
+	var changed: bool = false
+	var i: int = 0
+	while i < settings_manager.bookmarks.size():
+		var bm: Dictionary = settings_manager.bookmarks[i]
+		if bm["script_path"] == script_path and not existing.has(bm["name"]):
+			settings_manager.bookmarks.remove_at(i)
+			changed = true
+		else:
+			i += 1
+	
+	if changed:
+		settings_manager._persist_bookmarks()
+		_update_bookmarks_ui()
+
+func _collapse_all():
+	settings_manager.set_all_categories_collapsed(true)
+	for category_item in category_items.values():
+		category_item.collapsed = true
+
+func _expand_all():
+	settings_manager.set_all_categories_collapsed(false)
+	for category_item in category_items.values():
+		category_item.collapsed = false
 
 func _on_outline_filter_input(event: InputEvent):
 	navigate_on_tree(event, outline_tree)
@@ -384,6 +773,80 @@ func navigate_on_tree(event: InputEvent, tree: Tree):
 
 var scroll_button_container: HBoxContainer
 
+## Toggles the visibility of outline-specific elements (tree, filter,
+## sort button, collapse/expand buttons, scroll buttons, bookmarks).
+## This is separate from minimalism (which hides the entire side panel).
+func _update_outline_ui_visibility():
+	if not settings_manager or not outline_tree:
+		return
+	var hidden: bool = settings_manager.is_outline_hidden
+	
+	outline_tree.visible = not hidden
+	if collapse_button_container:
+		collapse_button_container.visible = not hidden
+	if bookmarks_container:
+		bookmarks_container.visible = not hidden
+	if scroll_button_container:
+		scroll_button_container.visible = not hidden
+	if outline_filter_txt:
+		outline_filter_txt.visible = not hidden
+	if sort_btn:
+		sort_btn.visible = not hidden
+
+func _add_collapse_buttons():
+	if collapse_button_container:
+		collapse_button_container.free()
+
+	collapse_button_container = HBoxContainer.new()
+	collapse_button_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	collapse_button_container.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	collapse_button_container.custom_minimum_size.y = 28
+
+	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
+	var base_color: Color = editor_settings.get_setting("interface/theme/base_color")
+
+	var normal: StyleBoxFlat = StyleBoxFlat.new()
+	normal.bg_color = base_color.darkened(0.2)
+	normal.corner_radius_top_left = 8
+	normal.corner_radius_top_right = 8
+	normal.corner_radius_bottom_right = 8
+	normal.corner_radius_bottom_left = 8
+	normal.expand_margin_top = -2
+	normal.expand_margin_bottom = -2
+	normal.expand_margin_left = -2
+	normal.expand_margin_right = -2
+
+	var hover: StyleBoxFlat = normal.duplicate()
+	hover.bg_color = base_color.lightened(0.1)
+
+	var focus: StyleBoxFlat = normal.duplicate()
+	focus.bg_color = base_color.darkened(0.3)
+
+	var collapse_all_btn: Button = Button.new()
+	collapse_all_btn.text = "Collapse"
+	collapse_all_btn.tooltip_text = "Collapse all outline categories"
+	collapse_all_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	collapse_all_btn.pressed.connect(_collapse_all)
+	collapse_all_btn.custom_minimum_size.x = 80
+	collapse_all_btn.add_theme_stylebox_override("hover", hover)
+	collapse_all_btn.add_theme_stylebox_override("normal", normal)
+	collapse_all_btn.add_theme_stylebox_override("pressed", focus)
+	collapse_button_container.add_child(collapse_all_btn)
+
+	var expand_all_btn: Button = Button.new()
+	expand_all_btn.text = "Expand"
+	expand_all_btn.tooltip_text = "Expand all outline categories"
+	expand_all_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	expand_all_btn.pressed.connect(_expand_all)
+	expand_all_btn.custom_minimum_size.x = 80
+	expand_all_btn.add_theme_stylebox_override("hover", hover)
+	expand_all_btn.add_theme_stylebox_override("normal", normal)
+	expand_all_btn.add_theme_stylebox_override("pressed", focus)
+	collapse_button_container.add_child(expand_all_btn)
+
+	outline_parent.add_child(collapse_button_container)
+	outline_parent.move_child(collapse_button_container, 0)
+
 func _add_scroll_buttons():
 	if scroll_button_container:
 		scroll_button_container.free()
@@ -392,27 +855,11 @@ func _add_scroll_buttons():
 	scroll_button_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll_button_container.size_flags_vertical = Control.SIZE_FILL
 	scroll_button_container.custom_minimum_size.y = 60
-	
-	var scroll_top_btn := Button.new()
-	scroll_top_btn.icon = icon_manager.scroll_top
-	scroll_top_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	scroll_top_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll_top_btn.pressed.connect(_scroll_to_top)
-	scroll_top_btn.custom_minimum_size.x = 60
-	scroll_button_container.add_child(scroll_top_btn)
 
-	var scroll_bottom_btn := Button.new()
-	scroll_bottom_btn.icon = icon_manager.scroll_bottom
-	scroll_bottom_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	scroll_bottom_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll_bottom_btn.pressed.connect(_scroll_to_bottom)
-	scroll_bottom_btn.custom_minimum_size.x = 60
-	scroll_button_container.add_child(scroll_bottom_btn)
-	
-	var editor_settings = EditorInterface.get_editor_settings()
+	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
 	var base_color: Color = editor_settings.get_setting("interface/theme/base_color")
 
-	var normal := StyleBoxFlat.new()
+	var normal: StyleBoxFlat = StyleBoxFlat.new()
 	normal.bg_color = base_color.darkened(0.2)
 	normal.corner_radius_top_left = 12
 	normal.corner_radius_top_right = 12
@@ -423,21 +870,35 @@ func _add_scroll_buttons():
 	normal.expand_margin_left = -3
 	normal.expand_margin_right = -3
 
-	var hover := normal.duplicate()
+	var hover: StyleBoxFlat = normal.duplicate()
 	hover.bg_color = base_color.lightened(0.1)
 
-	var focus := normal.duplicate()
+	var focus: StyleBoxFlat = normal.duplicate()
 	focus.bg_color = base_color.darkened(0.3)
-	
+
+	var scroll_top_btn: Button = Button.new()
+	scroll_top_btn.icon = icon_manager.scroll_top
+	scroll_top_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	scroll_top_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_top_btn.pressed.connect(_scroll_to_top)
+	scroll_top_btn.custom_minimum_size.x = 60
 	scroll_top_btn.add_theme_stylebox_override("hover", hover)
 	scroll_top_btn.add_theme_stylebox_override("normal", normal)
 	scroll_top_btn.add_theme_stylebox_override("pressed", focus)
 	scroll_top_btn.tooltip_text = "Scroll to Top"
-	
+	scroll_button_container.add_child(scroll_top_btn)
+
+	var scroll_bottom_btn: Button = Button.new()
+	scroll_bottom_btn.icon = icon_manager.scroll_bottom
+	scroll_bottom_btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	scroll_bottom_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_bottom_btn.pressed.connect(_scroll_to_bottom)
+	scroll_bottom_btn.custom_minimum_size.x = 60
 	scroll_bottom_btn.add_theme_stylebox_override("hover", hover)
 	scroll_bottom_btn.add_theme_stylebox_override("normal", normal)
 	scroll_bottom_btn.add_theme_stylebox_override("pressed", focus)
 	scroll_bottom_btn.tooltip_text = "Scroll to Bottom"
+	scroll_button_container.add_child(scroll_bottom_btn)
 	
 	outline_parent.add_child(scroll_button_container)
 	outline_parent.move_child(scroll_button_container, outline_parent.get_child_count())
@@ -468,6 +929,7 @@ func _scroll_to_bottom():
 	code_edit.set_caret_column(lines[last_index].length())
 	code_edit.set_h_scroll(0)
 	code_edit.grab_focus()
+
 
 func find_or_null(arr: Array[Node], index: int = 0) -> Node:
 	if arr.is_empty():
