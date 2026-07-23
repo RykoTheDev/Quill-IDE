@@ -1,2 +1,3 @@
 res://addons/quill-ide/plugs/quick_open.tscn
 res://addons/quill-ide/plugin.gd
+res://addons/quill-ide/plugin.cfg
