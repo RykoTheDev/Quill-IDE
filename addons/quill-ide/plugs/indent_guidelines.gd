@@ -3,26 +3,36 @@ class_name IndentGuidelinesManager
 
 
 const SETTINGS_ROOT: StringName = &"Quill/IndentGuidelines/"
+const SETTINGS_VERSION: StringName = &"Quill/_indent_version"
 
-const GUIDELINES_DRAW: StringName = SETTINGS_ROOT + &"guidelines/draw"
-const GUIDELINES_COLOR: StringName = SETTINGS_ROOT + &"guidelines/color"
-const GUIDELINES_ACTIVE_COLOR: StringName = SETTINGS_ROOT + &"guidelines/active_color"
-const GUIDELINES_STYLE: StringName = SETTINGS_ROOT + &"guidelines/style"
-const GUIDELINES_DRAW_SIDE: StringName = SETTINGS_ROOT + &"guidelines/draw_side"
-const GUIDELINES_WIDTH: StringName = SETTINGS_ROOT + &"guidelines/width"
-const GUIDELINES_KEEP_CARET: StringName = SETTINGS_ROOT + &"guidelines/keep_caret"
-const GUIDELINES_Y_OFFSET: StringName = SETTINGS_ROOT + &"guidelines/y_offset"
-const GUIDELINES_DRAW_ROOT_GUIDES: StringName = SETTINGS_ROOT + &"guidelines/draw_root_guides"
+# General
+const GUIDELINES_DRAW: StringName = SETTINGS_ROOT + &"general/draw"
 
+# Appearance
+const GUIDELINES_COLOR: StringName = SETTINGS_ROOT + &"appearance/color"
+const GUIDELINES_ACTIVE_COLOR: StringName = SETTINGS_ROOT + &"appearance/active_color"
+const GUIDELINES_STYLE: StringName = SETTINGS_ROOT + &"appearance/style"
+const GUIDELINES_DRAW_SIDE: StringName = SETTINGS_ROOT + &"appearance/draw_side"
+const GUIDELINES_WIDTH: StringName = SETTINGS_ROOT + &"appearance/width"
+const GUIDELINES_Y_OFFSET: StringName = SETTINGS_ROOT + &"appearance/y_offset"
+const GUIDELINES_DRAW_ROOT_GUIDES: StringName = SETTINGS_ROOT + &"appearance/draw_root_guides"
+
+# Behavior
+const GUIDELINES_KEEP_CARET: StringName = SETTINGS_ROOT + &"behavior/keep_caret"
+
+# Rainbow
+const RAINBOW_ENABLED: StringName = SETTINGS_ROOT + &"rainbow/enabled"
+
+# Foldmarks
 const FOLDMARKS_DRAW: StringName = SETTINGS_ROOT + &"foldmarks/draw"
 const FOLDMARKS_COLOR: StringName = SETTINGS_ROOT + &"foldmarks/color"
 const FOLDMARKS_WIDTH: StringName = SETTINGS_ROOT + &"foldmarks/width"
 const FOLDMARKS_X_OFFSET: StringName = SETTINGS_ROOT + &"foldmarks/x_offset"
 const FOLDMARKS_Y_OFFSET: StringName = SETTINGS_ROOT + &"foldmarks/y_offset"
 
+# Tweaks
 const TWEAKS_COMPLETION_LINES: StringName = SETTINGS_ROOT + &"tweaks/completion_lines"
 const TWEAKS_COMPLETION_MAX_WIDTH: StringName = SETTINGS_ROOT + &"tweaks/completion_max_width"
-
 
 enum GuidelinesStyle { LINE, LINE_CLOSE }
 enum GuidelinesOffset { LEFT = 0, MIDDLE, RIGHT }
@@ -46,6 +56,7 @@ var foldmark_y_offset: float
 
 var tweak_completion_lines: int = 7
 var tweak_completion_max_width: int = 50
+var rainbow_enabled: bool = false
 
 
 var ids_code_edits: Array[int]
@@ -102,15 +113,26 @@ func handle_settings_change(changed_settings: PackedStringArray) -> void:
 func _register_settings() -> void:
 	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
 
+	var current_version: int = 2
+	var stored_version: int = editor_settings.get_setting(SETTINGS_VERSION) if editor_settings.has_setting(SETTINGS_VERSION) else 0
+
+	if stored_version < current_version:
+		_migrate_settings(editor_settings)
+		editor_settings.set_setting(SETTINGS_VERSION, current_version)
+
 	_register_setting(editor_settings, GUIDELINES_DRAW, draw_guidelines, TYPE_BOOL)
+
 	_register_setting(editor_settings, GUIDELINES_COLOR, guideline_color, TYPE_COLOR)
 	_register_setting(editor_settings, GUIDELINES_ACTIVE_COLOR, guideline_active_color, TYPE_COLOR)
 	_register_setting(editor_settings, GUIDELINES_STYLE, guidelines_style, TYPE_INT, PROPERTY_HINT_ENUM, "Line, Closed line")
 	_register_setting(editor_settings, GUIDELINES_DRAW_SIDE, guideline_drawside, TYPE_INT, PROPERTY_HINT_ENUM, "Left, Middle, Right")
 	_register_setting(editor_settings, GUIDELINES_WIDTH, guideline_width, TYPE_FLOAT, PROPERTY_HINT_RANGE, "0.5,5.0,0.5")
-	_register_setting(editor_settings, GUIDELINES_KEEP_CARET, guideline_keep_caret, TYPE_BOOL)
 	_register_setting(editor_settings, GUIDELINES_Y_OFFSET, guideline_y_offset, TYPE_FLOAT, PROPERTY_HINT_RANGE, "-10,10,0.5")
 	_register_setting(editor_settings, GUIDELINES_DRAW_ROOT_GUIDES, guideline_draw_root_guides, TYPE_BOOL)
+
+	_register_setting(editor_settings, GUIDELINES_KEEP_CARET, guideline_keep_caret, TYPE_BOOL)
+
+	_register_setting(editor_settings, RAINBOW_ENABLED, rainbow_enabled, TYPE_BOOL)
 
 	_register_setting(editor_settings, FOLDMARKS_DRAW, draw_foldmarks, TYPE_BOOL)
 	_register_setting(editor_settings, FOLDMARKS_COLOR, foldmark_color, TYPE_COLOR)
@@ -120,6 +142,25 @@ func _register_settings() -> void:
 
 	_register_setting(editor_settings, TWEAKS_COMPLETION_LINES, tweak_completion_lines, TYPE_INT, PROPERTY_HINT_RANGE, "0,20,1")
 	_register_setting(editor_settings, TWEAKS_COMPLETION_MAX_WIDTH, tweak_completion_max_width, TYPE_INT, PROPERTY_HINT_RANGE, "10,100,1")
+
+func _migrate_settings(editor_settings: EditorSettings) -> void:
+	var old_to_new: Dictionary = {
+		"Quill/IndentGuidelines/guidelines/draw": "Quill/IndentGuidelines/general/draw",
+		"Quill/IndentGuidelines/guidelines/color": "Quill/IndentGuidelines/appearance/color",
+		"Quill/IndentGuidelines/guidelines/active_color": "Quill/IndentGuidelines/appearance/active_color",
+		"Quill/IndentGuidelines/guidelines/style": "Quill/IndentGuidelines/appearance/style",
+		"Quill/IndentGuidelines/guidelines/draw_side": "Quill/IndentGuidelines/appearance/draw_side",
+		"Quill/IndentGuidelines/guidelines/width": "Quill/IndentGuidelines/appearance/width",
+		"Quill/IndentGuidelines/guidelines/keep_caret": "Quill/IndentGuidelines/behavior/keep_caret",
+		"Quill/IndentGuidelines/guidelines/y_offset": "Quill/IndentGuidelines/appearance/y_offset",
+		"Quill/IndentGuidelines/guidelines/draw_root_guides": "Quill/IndentGuidelines/appearance/draw_root_guides"
+	}
+	for old_path: String in old_to_new:
+		if editor_settings.has_setting(old_path):
+			var val: Variant = editor_settings.get_setting(old_path)
+			var new_path: String = old_to_new[old_path]
+			editor_settings.erase(old_path)
+			editor_settings.set_setting(new_path, val)
 
 func _register_setting(editor_settings: EditorSettings, setting_name: StringName, default_value: Variant, type: int, hint: int = PROPERTY_HINT_NONE, hint_string: String = "") -> void:
 	if not editor_settings.has_setting(setting_name):
@@ -160,6 +201,7 @@ func _sync_setting(setting_name: StringName) -> void:
 		FOLDMARKS_Y_OFFSET: foldmark_y_offset = editor_settings.get_setting(setting_name)
 		TWEAKS_COMPLETION_LINES: tweak_completion_lines = editor_settings.get_setting(setting_name)
 		TWEAKS_COMPLETION_MAX_WIDTH: tweak_completion_max_width = editor_settings.get_setting(setting_name)
+		RAINBOW_ENABLED: rainbow_enabled = editor_settings.get_setting(setting_name)
 
 
 func scaled(p_val: float) -> float:
@@ -237,6 +279,7 @@ func build_lines(code_edit: CodeEdit, p_lines_from: int, p_lines_to: int, output
 				l.indent = i * indent_size
 				l.lineno_from = line - skiped_lines
 				l.lineno_to = p_lines_to - 1
+				l.source_lineno = line
 				tmp_lines.append(l)
 			else:
 				tmp_lines[i].height += 1 + skiped_lines
@@ -392,9 +435,13 @@ func _draw_guidelines(code_edit: CodeEdit, draw_rid: RID, output: Array[LineInCo
 		if _x < xmargin_beg:
 			continue
 
-		var color: Color = guideline_color
-		if caret_idx >= line_data.lineno_from and caret_idx <= line_data.lineno_to and caret_indent == line_data.indent + indent_size:
-			color = guideline_active_color
+		var color: Color
+		if rainbow_enabled:
+			color = _get_rainbow_color(code_edit, line_data, caret_idx, caret_indent, indent_size)
+		else:
+			color = guideline_color
+			if caret_idx >= line_data.lineno_from and caret_idx <= line_data.lineno_to and caret_indent == line_data.indent + indent_size:
+				color = guideline_active_color
 
 		var line_no: int = line_data.lineno_to
 		var offset_y: float = scaled(minf(block_ends.count(line_no) * 2.0, font.get_height(font_size) / 2.0) + 2.0)
@@ -411,6 +458,72 @@ func _draw_guidelines(code_edit: CodeEdit, draw_rid: RID, output: Array[LineInCo
 
 	if len(points) > 0:
 		RenderingServer.canvas_item_add_multiline(draw_rid, points, colors, guideline_width)
+
+func _get_rainbow_color(code_edit: CodeEdit, line_data: LineInCodeEditor, caret_idx: int, caret_indent: int, indent_size: int) -> Color:
+	var in_range: bool = caret_idx >= line_data.lineno_from and caret_idx <= line_data.lineno_to and caret_indent == line_data.indent + indent_size
+	var is_active: bool = in_range
+	var source_line: int = line_data.source_lineno if line_data.source_lineno >= 0 else line_data.lineno_from
+	var line_text: String = code_edit.get_line(source_line).strip_edges()
+
+	var keyword: String
+	if line_text.begins_with("static "):
+		var rest: String = line_text.substr(7).strip_edges()
+		keyword = rest.get_slice(" ", 0)
+	else:
+		keyword = line_text.get_slice(" ", 0)
+
+	var base_color: Color
+	match keyword:
+		"func":
+			base_color = Color(1.0, 0.33, 0.33)
+		"if", "elif", "else":
+			base_color = Color(0.33, 0.53, 1.0)
+		"for", "while":
+			base_color = Color(0.33, 1.0, 0.53)
+		"match":
+			base_color = Color(1.0, 0.67, 0.2)
+		"class", "class_name":
+			base_color = Color(1.0, 1.0, 0.4)
+		"enum":
+			base_color = Color(0.33, 1.0, 1.0)
+		"signal":
+			base_color = Color(1.0, 0.4, 0.8)
+		"var":
+			base_color = Color(0.2, 0.8, 0.8)
+		"const":
+			base_color = Color(0.67, 0.67, 0.67)
+		"extends":
+			base_color = Color(0.67, 0.4, 1.0)
+		"@export", "@onready":
+			base_color = Color(0.4, 0.87, 0.4)
+		_:
+			base_color = guideline_color
+
+	if not is_active and caret_indent == line_data.indent:
+		var caret_text: String = code_edit.get_line(caret_idx).strip_edges()
+		var caret_keyword: String
+		if caret_text.begins_with("static "):
+			caret_keyword = caret_text.substr(7).strip_edges().get_slice(" ", 0)
+		else:
+			caret_keyword = caret_text.get_slice(" ", 0)
+		if _is_scope_keyword(caret_keyword):
+			is_active = true
+
+	if is_active:
+		return Color(
+			mini(base_color.r * 1.6, 1.0),
+			mini(base_color.g * 1.6, 1.0),
+			mini(base_color.b * 1.6, 1.0),
+			mini(base_color.a * 1.8, 0.85)
+		)
+	else:
+		return Color(base_color.r, base_color.g, base_color.b, 0.35)
+
+func _is_scope_keyword(keyword: String) -> bool:
+	match keyword:
+		"func", "if", "elif", "else", "for", "while", "match", "class", "class_name", "enum", "signal":
+			return true
+	return false
 
 func _draw_foldmarks(code_edit: CodeEdit, draw_rid: RID, foldedlines: PackedInt32Array, xmargin_beg: int, row_height: int, vscroll_delta: float) -> void:
 	var _x: float = xmargin_beg + foldmark_x_offset
@@ -434,3 +547,4 @@ class LineInCodeEditor:
 	var lineno_from: int = -1
 	var lineno_to: int = -1
 	var close_width: int = 0
+	var source_lineno: int = -1

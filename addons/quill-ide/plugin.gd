@@ -12,7 +12,6 @@ const IndentGuidelinesManager = preload("res://addons/quill-ide/plugs/indent_gui
 
 const QUICK_OPEN_SCENE: PackedScene = preload("res://addons/quill-ide/plugs/quick_open.tscn")
 
-
 const QUILL: StringName = &"Quill/"
 const QUICK_OPEN: StringName = QUILL + &"QuickOpen/"
 const OPEN_QUICK_SEARCH_POPUP: StringName = QUICK_OPEN + &"open_quick_search_popup"
