@@ -95,7 +95,6 @@ func cleanup():
 		if script_filter_txt != null:
 			script_filter_txt.gui_input.disconnect(_on_script_filter_input)
 	
-	# Restore the left side panel visibility in case minimalism was active
 	if left_side_panel:
 		left_side_panel.visible = true
 
@@ -116,10 +115,6 @@ func update_editor():
 	if scripts_tab_bar: _customize_tabbar(scripts_tab_bar)
 
 func _on_active_script_changed(script: Script):
-	# Auto-close all previously opened scripts when a new one is opened.
-	# Uses call_deferred so the new tab is fully settled before we
-	# start closing others — prevents index mismatch between the
-	# scripts_item_list and the tab container.
 	if settings_manager and settings_manager.is_auto_close_scripts and not _closing_tabs:
 		_closing_tabs = true
 		call_deferred("_close_other_tabs_deferred")
@@ -147,13 +142,11 @@ func _customize_tabbar(tab_bar: TabBar) -> void:
 	sb_normal.corner_radius_bottom_right = 25
 	sb_normal.corner_radius_bottom_left = 25
 	
-	# inside padding
 	sb_normal.content_margin_left = 17
 	sb_normal.content_margin_right = 17
 	sb_normal.content_margin_top = 2
 	sb_normal.content_margin_bottom = 8
 	
-	# OUTSIDE padding
 	sb_normal.expand_margin_left = -2
 	sb_normal.expand_margin_right = -2
 	sb_normal.expand_margin_top = 3
@@ -176,7 +169,10 @@ func _customize_tabbar(tab_bar: TabBar) -> void:
 	tab_bar.add_theme_stylebox_override("tab_focus", sb_focus)
 	tab_bar.add_theme_stylebox_override("tab_selected", sb_focus)
 
-	tab_bar.add_theme_font_size_override("font_size", 15)
+	var main_font: Font = EditorInterface.get_base_control().get_theme_font(&"main", &"EditorFonts")
+	if (main_font != null):
+		tab_bar.add_theme_font_override(&"font", main_font)
+	tab_bar.add_theme_font_size_override(&"font_size", 15)
 
 func handle_settings_change(changed_settings: PackedStringArray, settings_mgr: QuillSettingsManager):
 	settings_manager = settings_mgr
@@ -189,10 +185,6 @@ func handle_settings_change(changed_settings: PackedStringArray, settings_mgr: Q
 		elif setting == settings_manager.MINIMALISM:
 			_update_minimalism()
 
-## Updates the entire left side panel + tabs visibility based on
-## the minimalism setting. When minimalism is on, the whole side
-## panel is hidden (script list, filter bar, outline, bookmarks,
-## everything) so only the code editor is visible.
 func _update_minimalism():
 	if not settings_manager or not left_side_panel:
 		return
@@ -340,13 +332,8 @@ func _on_tab_close(tab_idx: int):
 	selected_tab = scripts_tab_bar.current_tab
 	
 	_on_tab_changed(selected_tab)
-	# Defer tab updates to allow the item list to finish processing
-	# the close operation. Otherwise update_tab() may read stale
-	# item list data and assign the wrong name to the next tab.
 	call_deferred("update_tabs")
 
-## Closes all open scripts except the one at [exclude_index].
-## Iterates right-to-left to keep left-side indices stable.
 func _close_all_except(exclude_index: int):
 	var tab_count: int = scripts_tab_container.get_tab_count()
 	if tab_count <= 1:
@@ -358,8 +345,6 @@ func _close_all_except(exclude_index: int):
 	for i in range(tab_count - 1, -1, -1):
 		if i != exclude_index:
 			simulate_item_clicked(i, MOUSE_BUTTON_MIDDLE)
-			# After closing a tab to the left of the excluded one,
-			# the excluded tab shifts left by one.
 			if i < exclude_index:
 				exclude_index -= 1
 	
@@ -442,8 +427,6 @@ static func find_or_null(arr: Array[Node], index: int = 0) -> Node:
 		return null
 	return arr[index]
 
-## Contains everything we modify on the Tab Control. Used to save and restore the behaviour
-## to keep the Engine in a clean state when the plugin is disabled.
 class TabStateCache:
 	var tabs_visible: bool
 	var drag_to_rearrange_enabled: bool

@@ -1,0 +1,68 @@
+[gd_scene format=3 uid="uid://cxhq8m6b037yk"]
+
+[ext_resource type="Script" uid="uid://b1mk65pfv1v8q" path="res://addons/quill-ide/plugs/quick_open.gd" id="1_ni5al"]
+
+[node name="QuickOpenPopup" type="PopupPanel" unique_id=1807472831]
+oversampling_override = 1.0
+size = Vector2i(500, 400)
+visible = true
+script = ExtResource("1_ni5al")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=45534854]
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 496.0
+offset_bottom = 396.0
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="Title" type="Label" parent="VBoxContainer" unique_id=1606704391]
+layout_mode = 2
+size_flags_horizontal = 4
+text = "Quick Resource Opener"
+
+[node name="TopBar" type="HBoxContainer" parent="VBoxContainer" unique_id=1947876477]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 0
+
+[node name="FilterBar" type="TabBar" parent="VBoxContainer/TopBar" unique_id=95994530]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 0
+current_tab = 0
+tab_count = 5
+tab_0/title = "All"
+tab_1/title = "Scenes"
+tab_2/title = "Scripts"
+tab_3/title = "Resources"
+tab_4/title = "Others"
+
+[node name="SearchOptionBtn" type="OptionButton" parent="VBoxContainer/TopBar" unique_id=1872872261]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 0
+selected = 0
+item_count = 2
+popup/item_0/text = "Hide Addons"
+popup/item_0/id = 0
+popup/item_1/text = "Show Addons"
+popup/item_1/id = 1
+
+[node name="FilterTxt" type="LineEdit" parent="VBoxContainer" unique_id=1819446227]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 0
+placeholder_text = "Search files..."
+clear_button_enabled = true
+
+[node name="FilesList" type="ItemList" parent="VBoxContainer" unique_id=528629105]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+allow_reselect = true
+fixed_icon_size = Vector2i(16, 16)

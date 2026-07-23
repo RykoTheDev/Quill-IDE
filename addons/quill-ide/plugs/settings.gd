@@ -193,7 +193,6 @@ func load_bookmarks() -> Array:
 		return []
 
 func add_bookmark(script_path: String, name: String, type: StringName, modifier: StringName) -> void:
-	# Avoid duplicates
 	for bm: Dictionary in bookmarks:
 		if bm["script_path"] == script_path and bm["name"] == name:
 			return

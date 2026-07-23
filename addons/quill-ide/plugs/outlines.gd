@@ -55,7 +55,6 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	if settings_manager.is_outline_right:
 		update_outline_position()
 	
-	# Replace existing outline with tree
 	old_outline = find_or_null(outline_container.find_children("*", "ItemList", true, false), 1)
 	outline_parent = old_outline.get_parent()
 	outline_parent.remove_child(old_outline)
@@ -96,7 +95,6 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	_add_bookmarks_section()
 	_add_scroll_buttons()
 	
-	# Apply initial outline visibility based on settings
 	_update_outline_ui_visibility()
 
 func cleanup():
@@ -104,9 +102,6 @@ func cleanup():
 		if split_container != outline_container.get_parent():
 			split_container.add_child(outline_container)
 		
-		# Preserve the current split offset (the left panel width)
-		# before moving the outline back to its original position.
-		# Don't recalculate from child sizes or they'll swap.
 		split_container.move_child(outline_container, 0)
 		
 		if outline_filter_txt:
@@ -148,12 +143,8 @@ func _on_editor_settings_changed():
 	var old_position: bool = settings_manager.is_outline_right
 	var old_hidden: bool = settings_manager.is_outline_hidden
 	settings_manager.sync_settings_all()
-	# Only reposition the outline when the outline position setting
-	# actually changed — avoid spamming layout updates on every
-	# arbitrary editor setting change.
 	if settings_manager.is_outline_right != old_position:
 		update_outline_position()
-	# Update outline-specific visibility if the hide-outline setting changed
 	if settings_manager.is_outline_hidden != old_hidden:
 		_update_outline_ui_visibility()
 	update_outline_cache()
@@ -172,9 +163,6 @@ func _on_script_modified(script: Script):
 		_cleanup_stale_bookmarks()
 
 func update_outline_position():
-	# Just move the child to the desired position. The split_offset
-	# is preserved automatically — don't manually override it,
-	# otherwise it swaps the panel sizes every time this is called.
 	if settings_manager.is_outline_right:
 		split_container.move_child(outline_container, 1)
 	else:
@@ -415,7 +403,6 @@ func _show_context_menu(item: TreeItem, at_position: Vector2):
 	var script: Script = EditorInterface.get_script_editor().get_current_script()
 	var item_icon: Texture2D = item.get_icon(0)
 	
-	# Store target info for the action handler
 	context_menu.set_meta(&"target_item", item)
 	
 	var script_path: String = script.resource_path if script else &""
@@ -522,7 +509,6 @@ func _add_bookmarks_section():
 	bookmarks_container.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	bookmarks_container.custom_minimum_size.y = 24
 	
-	# Header row: label + remove all button
 	var header: HBoxContainer = HBoxContainer.new()
 	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.custom_minimum_size.y = 24
@@ -568,7 +554,6 @@ func _add_bookmarks_section():
 	
 	bookmarks_container.add_child(header)
 	
-	# Scroll container for bookmarks list so it scrolls when there are many items
 	var bookmarks_scroll: ScrollContainer = ScrollContainer.new()
 	bookmarks_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bookmarks_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -577,7 +562,6 @@ func _add_bookmarks_section():
 	bookmarks_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	bookmarks_container.add_child(bookmarks_scroll)
 	
-	# Bookmarks tree
 	bookmarks_tree = Tree.new()
 	bookmarks_tree.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	bookmarks_tree.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -592,15 +576,12 @@ func _add_bookmarks_section():
 	bookmarks_tree.gui_input.connect(_on_bookmarks_tree_gui_input)
 	bookmarks_scroll.add_child(bookmarks_tree)
 	
-	# Context menu for bookmarks
 	bookmarks_context_menu = PopupMenu.new()
 	bookmarks_tree.add_child(bookmarks_context_menu)
 	bookmarks_context_menu.id_pressed.connect(_on_bookmarks_context_menu_id_pressed)
 	bookmarks_context_menu.set_meta(&"target_item", null)
 	
-	# Add to outline parent before scroll buttons
 	outline_parent.add_child(bookmarks_container)
-	# Move it right before scroll buttons
 	var scroll_idx: int = outline_parent.get_child_count() - 1
 	outline_parent.move_child(bookmarks_container, scroll_idx)
 	
@@ -616,7 +597,6 @@ func _update_bookmarks_ui():
 	var bookmarks_data: Array = settings_manager.bookmarks
 	var count: int = bookmarks_data.size()
 	
-	# Update header label
 	var header: HBoxContainer = bookmarks_container.get_child(0) if bookmarks_container.get_child_count() > 0 else null
 	if header:
 		var label: Label = header.get_child(0)
@@ -682,7 +662,6 @@ func _cleanup_stale_bookmarks() -> void:
 	if script_path.is_empty():
 		return
 	
-	# Collect all existing member names from the current cache
 	var existing: Dictionary = {}
 	for name: String in outline_cache.engine_funcs:
 		existing[name] = true
@@ -699,7 +678,6 @@ func _cleanup_stale_bookmarks() -> void:
 	for name: String in outline_cache.classes:
 		existing[name] = true
 	
-	# Remove any bookmarks for this script whose member no longer exists
 	var changed: bool = false
 	var i: int = 0
 	while i < settings_manager.bookmarks.size():
@@ -773,9 +751,6 @@ func navigate_on_tree(event: InputEvent, tree: Tree):
 
 var scroll_button_container: HBoxContainer
 
-## Toggles the visibility of outline-specific elements (tree, filter,
-## sort button, collapse/expand buttons, scroll buttons, bookmarks).
-## This is separate from minimalism (which hides the entire side panel).
 func _update_outline_ui_visibility():
 	if not settings_manager or not outline_tree:
 		return
