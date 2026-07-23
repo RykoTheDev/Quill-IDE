@@ -27,32 +27,32 @@ signal script_tab_changed(script: Script)
 func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	settings_manager = settings_mgr
 	icon_manager = icon_mgr
-	
+
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
 	var split_container = find_or_null(script_editor.find_children("*", "HSplitContainer", true, false))
 	left_side_panel = split_container.get_child(0)
-	
+
 	scripts_item_list = find_or_null(script_editor.find_children("*", "ItemList", true, false))
 	scripts_item_list.allow_reselect = true
-	
+
 	script_filter_txt = find_or_null(scripts_item_list.get_parent().find_children("*", "LineEdit", true, false))
 	script_filter_txt.gui_input.connect(_on_script_filter_input)
-	
+
 	scripts_tab_container = find_or_null(script_editor.find_children("*", "TabContainer", true, false))
 	scripts_tab_bar = scripts_tab_container.get_tab_bar()
-	
+
 	tab_state = TabStateCache.new()
 	tab_state.save(scripts_tab_container, scripts_tab_bar)
-	
+
 	scripts_tab_bar.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	scripts_tab_container.tabs_visible = settings_manager.is_script_tabs_visible
 	scripts_tab_container.drag_to_rearrange_enabled = true
 	update_tabs_position()
-	
+
 	scripts_tab_bar.tab_close_display_policy = TabBar.CLOSE_BUTTON_SHOW_ACTIVE_ONLY
 	scripts_tab_bar.drag_to_rearrange_enabled = true
 	scripts_tab_bar.select_with_rmb = true
-	
+
 	scripts_tab_bar.tab_close_pressed.connect(_on_tab_close)
 	scripts_tab_bar.tab_rmb_clicked.connect(_on_tab_rmb)
 	scripts_tab_bar.tab_hovered.connect(_on_tab_hovered)
@@ -60,13 +60,13 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	scripts_tab_bar.active_tab_rearranged.connect(_on_active_tab_rearranged)
 	scripts_tab_bar.gui_input.connect(_on_tab_bar_gui_input)
 	scripts_tab_bar.tab_changed.connect(_on_tab_changed)
-	
+
 	panel_container = scripts_item_list.get_parent().get_parent()
-	
+
 	update_script_list_visibility()
 	_update_minimalism()
 	_on_tab_changed(scripts_tab_bar.current_tab)
-	
+
 	if not script_editor.editor_script_changed.is_connected(_on_active_script_changed):
 		script_editor.editor_script_changed.connect(_on_active_script_changed)
 
@@ -76,10 +76,10 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 func cleanup():
 	if old_script_editor_base != null:
 		old_script_editor_base.edited_script_changed.disconnect(_on_script_changed)
-	
+
 	if scripts_tab_container != null:
 		tab_state.restore(scripts_tab_container, scripts_tab_bar)
-		
+
 		scripts_tab_bar.mouse_exited.disconnect(_on_tab_bar_mouse_exited)
 		scripts_tab_bar.gui_input.disconnect(_on_tab_bar_gui_input)
 		scripts_tab_bar.tab_close_pressed.disconnect(_on_tab_close)
@@ -87,38 +87,38 @@ func cleanup():
 		scripts_tab_bar.tab_hovered.disconnect(_on_tab_hovered)
 		scripts_tab_bar.active_tab_rearranged.disconnect(_on_active_tab_rearranged)
 		scripts_tab_bar.tab_changed.disconnect(_on_tab_changed)
-	
+
 	if scripts_item_list != null:
 		scripts_item_list.allow_reselect = false
 		scripts_item_list.get_parent().visible = true
-		
+
 		if script_filter_txt != null:
 			script_filter_txt.gui_input.disconnect(_on_script_filter_input)
-	
+
 	if left_side_panel:
 		left_side_panel.visible = true
 
 func update_editor():
 	update_script_text_filter()
-	
+
 	if sync_script_list:
 		if file_to_navigate != &"":
 			EditorInterface.get_file_system_dock().navigate_to_path(file_to_navigate)
 			EditorInterface.get_script_editor().get_current_editor().get_base_editor().grab_focus()
 			file_to_navigate = &""
-		
+
 		sync_tab_with_script_list()
 		sync_script_list = false
-	
+
 	update_tabs()
-	
+
 	if scripts_tab_bar: _customize_tabbar(scripts_tab_bar)
 
 func _on_active_script_changed(script: Script):
 	if settings_manager and settings_manager.is_auto_close_scripts and not _closing_tabs:
 		_closing_tabs = true
 		call_deferred("_close_other_tabs_deferred")
-	
+
 	update_tabs()
 
 func _close_other_tabs_deferred():
@@ -131,7 +131,7 @@ func _on_script_modified(script: Script):
 
 func _customize_tabbar(tab_bar: TabBar) -> void:
 	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
-	
+
 	var sb_normal: StyleBoxFlat = StyleBoxFlat.new()
 	var base_color: Color = editor_settings.get_setting("interface/theme/base_color")
 	var contrast_factor: float = 0.15
@@ -141,12 +141,12 @@ func _customize_tabbar(tab_bar: TabBar) -> void:
 	sb_normal.corner_radius_top_right = 25
 	sb_normal.corner_radius_bottom_right = 25
 	sb_normal.corner_radius_bottom_left = 25
-	
+
 	sb_normal.content_margin_left = 17
 	sb_normal.content_margin_right = 17
 	sb_normal.content_margin_top = 2
 	sb_normal.content_margin_bottom = 8
-	
+
 	sb_normal.expand_margin_left = -2
 	sb_normal.expand_margin_right = -2
 	sb_normal.expand_margin_top = 3
@@ -158,7 +158,7 @@ func _customize_tabbar(tab_bar: TabBar) -> void:
 	var sb_focus: StyleBoxFlat = sb_normal.duplicate()
 	var bg_color: Color = editor_settings.get_setting("text_editor/theme/highlighting/background_color")
 	sb_focus.bg_color = bg_color
-	
+
 	sb_focus.corner_radius_top_left = 14
 	sb_focus.corner_radius_top_right = 14
 	sb_focus.expand_margin_bottom = 100
@@ -176,7 +176,7 @@ func _customize_tabbar(tab_bar: TabBar) -> void:
 
 func handle_settings_change(changed_settings: PackedStringArray, settings_mgr: QuillSettingsManager):
 	settings_manager = settings_mgr
-	
+
 	for setting: String in changed_settings:
 		if setting == settings_manager.SCRIPT_LIST_VISIBLE:
 			update_script_list_visibility()
@@ -189,7 +189,7 @@ func _update_minimalism():
 	if not settings_manager or not left_side_panel:
 		return
 	var minimalism: bool = settings_manager.is_minimalism
-	
+
 	if minimalism:
 		left_side_panel.visible = false
 		scripts_tab_container.tabs_visible = false
@@ -253,7 +253,7 @@ func update_tabs_position():
 func sync_tab_with_script_list():
 	if selected_tab >= scripts_item_list.item_count:
 		selected_tab = scripts_tab_bar.current_tab
-	
+
 	if selected_tab != -1 && scripts_item_list.item_count > 0 && !scripts_item_list.is_selected(selected_tab):
 		scripts_item_list.select(selected_tab)
 		scripts_item_list.item_selected.emit(selected_tab)
@@ -263,11 +263,11 @@ func get_res_path(idx: int) -> String:
 	var tab_control: Control = scripts_tab_container.get_tab_control(idx)
 	if tab_control == null:
 		return ''
-	
+
 	var path_var: Variant = tab_control.get(&"metadata/_edit_res_path")
 	if path_var == null:
 		return ''
-	
+
 	return path_var
 
 func simulate_item_clicked(tab_idx: int, mouse_idx: int):
@@ -278,7 +278,7 @@ func _on_script_filter_input(event: InputEvent):
 
 func _on_tab_changed(index: int):
 	selected_tab = index
-	
+
 	if old_script_editor_base != null:
 		old_script_editor_base.edited_script_changed.disconnect(_on_script_changed)
 		var old_code_edit: CodeEdit = old_script_editor_base.get_base_editor()
@@ -299,17 +299,17 @@ func _on_tab_changed(index: int):
 			code_edit.text_changed.connect(_on_script_text_changed)
 
 	sync_script_list = true
-	
+
 	if settings_manager.is_auto_navigate_in_fs && script_editor.get_current_script() != null:
 		var file: String = script_editor.get_current_script().get_path()
-		
+
 		if file.contains(BUILT_IN_SCRIPT):
 			file = file.get_slice(BUILT_IN_SCRIPT, 0)
-		
+
 		file_to_navigate = file
 	else:
 		file_to_navigate = &""
-	
+
 	var script: Script = script_editor.get_current_script()
 	if script:
 		emit_signal("script_tab_changed", script)
@@ -328,9 +328,9 @@ func _on_script_changed():
 func _on_tab_close(tab_idx: int):
 	update_script_text_filter()
 	simulate_item_clicked(tab_idx, MOUSE_BUTTON_MIDDLE)
-	
+
 	selected_tab = scripts_tab_bar.current_tab
-	
+
 	_on_tab_changed(selected_tab)
 	call_deferred("update_tabs")
 
@@ -338,16 +338,16 @@ func _close_all_except(exclude_index: int):
 	var tab_count: int = scripts_tab_container.get_tab_count()
 	if tab_count <= 1:
 		return
-	
+
 	_closing_tabs = true
 	update_script_text_filter()
-	
+
 	for i in range(tab_count - 1, -1, -1):
 		if i != exclude_index:
 			simulate_item_clicked(i, MOUSE_BUTTON_MIDDLE)
 			if i < exclude_index:
 				exclude_index -= 1
-	
+
 	_closing_tabs = false
 
 func _on_tab_rmb(tab_idx: int):
@@ -367,12 +367,12 @@ func _on_active_tab_rearranged(idx_to: int):
 func _on_tab_bar_gui_input(event: InputEvent):
 	if last_tab_hovered == -1:
 		return
-	
+
 	if event is InputEventMouseButton:
 		if event.is_pressed() and event.button_index == MOUSE_BUTTON_MIDDLE:
 			update_script_text_filter()
 			simulate_item_clicked(last_tab_hovered, MOUSE_BUTTON_MIDDLE)
-			
+
 			if last_tab_hovered >= scripts_tab_bar.tab_count - 1:
 				last_tab_hovered = -1
 
@@ -434,7 +434,7 @@ class TabStateCache:
 	var tab_bar_drag_to_rearrange_enabled: bool
 	var tab_close_display_policy: TabBar.CloseButtonDisplayPolicy
 	var select_with_rmb: bool
-	
+
 	func save(tab_container: TabContainer, tab_bar: TabBar):
 		if tab_container != null:
 			tabs_visible = tab_container.tabs_visible
@@ -444,7 +444,7 @@ class TabStateCache:
 			tab_close_display_policy = tab_bar.tab_close_display_policy
 			select_with_rmb = tab_bar.select_with_rmb
 			auto_translate_mode_state = tab_bar.auto_translate_mode
-	
+
 	func restore(tab_container: TabContainer, tab_bar: TabBar):
 		if tab_container != null:
 			tab_container.tabs_visible = tabs_visible

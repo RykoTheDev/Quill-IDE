@@ -60,7 +60,7 @@ func init_settings():
 	init_outline_order()
 	collapsed_categories = load_collapsed_categories()
 	bookmarks = load_bookmarks()
-	
+
 	show_funcs = get_setting(SHOW_FUNCS, show_funcs)
 	show_signals = get_setting(SHOW_SIGNALS, show_signals)
 	show_constants = get_setting(SHOW_CONSTANTS, show_constants)
@@ -80,10 +80,10 @@ func init_outline_order():
 
 func sync_settings(changed_settings: PackedStringArray):
 	if suppress_settings_sync: return
-	
+
 	for setting: String in changed_settings:
 		if !setting.begins_with(GODOT_IDE): continue
-		
+
 		match setting:
 			OUTLINE_COLLAPSED: collapsed_categories = load_collapsed_categories()
 			OUTLINE_ORDER: init_outline_order()
@@ -105,7 +105,7 @@ func sync_settings(changed_settings: PackedStringArray):
 
 func sync_settings_all():
 	if suppress_settings_sync: return
-	
+
 	is_outline_right = get_setting(OUTLINE_POSITION_RIGHT, is_outline_right)
 	hide_private_members = get_setting(HIDE_PRIVATE_MEMBERS, hide_private_members)
 	is_script_list_visible = get_setting(SCRIPT_LIST_VISIBLE, is_script_list_visible)
@@ -117,7 +117,7 @@ func sync_settings_all():
 	init_outline_order()
 	collapsed_categories = load_collapsed_categories()
 	bookmarks = load_bookmarks()
-	
+
 	show_funcs = get_setting(SHOW_FUNCS, show_funcs)
 	show_signals = get_setting(SHOW_SIGNALS, show_signals)
 	show_constants = get_setting(SHOW_CONSTANTS, show_constants)
@@ -164,7 +164,7 @@ func set_category_collapsed(category_name: String, collapsed: bool):
 		var idx: int = collapsed_categories.find(category_name)
 		if idx != -1:
 			collapsed_categories.remove_at(idx)
-	
+
 	_persist_collapsed_categories()
 
 func set_all_categories_collapsed(collapsed: bool):
@@ -176,7 +176,7 @@ func set_all_categories_collapsed(collapsed: bool):
 		collapsed_categories = all_categories
 	else:
 		collapsed_categories = PackedStringArray()
-	
+
 	_persist_collapsed_categories()
 
 func _persist_collapsed_categories():

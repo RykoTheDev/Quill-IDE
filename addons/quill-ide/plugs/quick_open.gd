@@ -17,12 +17,12 @@ enum Category {
 	ALL = 0, SCENES = 1, GDSCRIPTS = 2, RESOURCES = 3
 }
 
-#region UI
+
 @onready var filter_bar: TabBar = %FilterBar
 @onready var search_option_btn: OptionButton = %SearchOptionBtn
 @onready var filter_txt: LineEdit = %FilterTxt
 @onready var files_list: ItemList = %FilesList
-#endregion
+
 
 var plugin: EditorPlugin
 
@@ -35,10 +35,10 @@ var all_files: Array[FileData]
 
 var is_rebuild_cache: bool = true
 
-#region Plugin and Shortcut processing
+
 func _ready() -> void:
 	popup_window = true
-	
+
 	filter_bar.clear_tabs()
 	filter_bar.add_tab(&"All")
 	filter_bar.add_tab(&"Scenes")
@@ -47,12 +47,12 @@ func _ready() -> void:
 	filter_bar.add_tab(&"Others")
 	filter_bar.current_tab = 0
 	filter_bar.tab_alignment = TabBar.ALIGNMENT_LEFT
-	
+
 	search_option_btn.clear()
 	search_option_btn.add_item(&"Hide Addons", 0)
 	search_option_btn.add_item(&"Show Addons", 1)
 	search_option_btn.selected = load_show_addons_setting()
-	
+
 	files_list.item_selected.connect(open_file)
 	search_option_btn.item_selected.connect(_on_show_addons_changed.unbind(1))
 	search_option_btn.item_selected.connect(rebuild_cache_and_ui.unbind(1))
@@ -94,7 +94,7 @@ func _shortcut_input(event: InputEvent) -> void:
 		if (new_tab == -1):
 			new_tab = filter_bar.get_tab_count() - 1
 		filter_bar.current_tab = new_tab
-#endregion
+
 
 func _input(event: InputEvent) -> void:
 	if (event is InputEventKey and event.pressed and not event.is_echo()):
