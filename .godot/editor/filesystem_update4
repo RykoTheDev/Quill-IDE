@@ -1,3 +1,3 @@
 res://addons/quill-ide/plugs/quick_open.tscn
-res://addons/quill-ide/plugin.gd
-res://addons/quill-ide/plugin.cfg
+res://addons/quill-ide/tabs_theme.tres
+res://addons/quill-ide/plugs/tabs.gd

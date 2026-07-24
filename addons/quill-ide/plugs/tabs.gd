@@ -22,6 +22,8 @@ var left_side_panel: Control
 
 var _closing_tabs: bool = false
 
+const TAB_THEME: Theme = preload("uid://dr3t6l2rux68p")
+
 signal script_tab_changed(script: Script)
 
 func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
@@ -130,49 +132,26 @@ func _on_script_modified(script: Script):
 		update_tabs()
 
 func _customize_tabbar(tab_bar: TabBar) -> void:
-	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
-
-	var sb_normal: StyleBoxFlat = StyleBoxFlat.new()
+	var editor_settings = EditorInterface.get_editor_settings()
 	var base_color: Color = editor_settings.get_setting("interface/theme/base_color")
-	var contrast_factor: float = 0.15
-
-	sb_normal.bg_color = base_color.darkened(contrast_factor)
-	sb_normal.corner_radius_top_left = 25
-	sb_normal.corner_radius_top_right = 25
-	sb_normal.corner_radius_bottom_right = 25
-	sb_normal.corner_radius_bottom_left = 25
-
-	sb_normal.content_margin_left = 17
-	sb_normal.content_margin_right = 17
-	sb_normal.content_margin_top = 2
-	sb_normal.content_margin_bottom = 8
-
-	sb_normal.expand_margin_left = -2
-	sb_normal.expand_margin_right = -2
-	sb_normal.expand_margin_top = 3
-	sb_normal.expand_margin_bottom = -3
-
-	var sb_hover: StyleBoxFlat = sb_normal.duplicate()
+	var contrast_factor: float = 0.25
+	var bg_color: Color = base_color.darkened(contrast_factor)
+	tab_bar.theme = TAB_THEME
+	var sb_normal = TAB_THEME.get_stylebox("tab_unselected", "TabBar").duplicate()
+	sb_normal.bg_color = base_color
+	
+	var sb_hover = TAB_THEME.get_stylebox("tab_hovered", "TabBar").duplicate()
 	sb_hover.bg_color = Color(0.146, 0.167, 0.2)
-
-	var sb_focus: StyleBoxFlat = sb_normal.duplicate()
-	var bg_color: Color = editor_settings.get_setting("text_editor/theme/highlighting/background_color")
+	
+	var sb_focus = TAB_THEME.get_stylebox("tab_selected", "TabBar").duplicate()
 	sb_focus.bg_color = bg_color
-
-	sb_focus.corner_radius_top_left = 14
-	sb_focus.corner_radius_top_right = 14
-	sb_focus.expand_margin_bottom = 100
-	sb_focus.content_margin_top = 3
-
+	sb_focus.expand_margin_bottom = 0
+	
 	tab_bar.add_theme_stylebox_override("tab_unselected", sb_normal)
 	tab_bar.add_theme_stylebox_override("tab_hovered", sb_hover)
-	tab_bar.add_theme_stylebox_override("tab_focus", sb_focus)
 	tab_bar.add_theme_stylebox_override("tab_selected", sb_focus)
+	tab_bar.add_theme_stylebox_override("tab_focus", sb_focus)
 
-	var main_font: Font = EditorInterface.get_base_control().get_theme_font(&"main", &"EditorFonts")
-	if (main_font != null):
-		tab_bar.add_theme_font_override(&"font", main_font)
-	tab_bar.add_theme_font_size_override(&"font_size", 15)
 
 func handle_settings_change(changed_settings: PackedStringArray, settings_mgr: QuillSettingsManager):
 	settings_manager = settings_mgr
