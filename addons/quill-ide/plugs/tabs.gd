@@ -201,12 +201,12 @@ func update_tabs():
 	for index: int in scripts_tab_container.get_tab_count():
 		update_tab(index)
 
-func update_tab(index: int):
+func update_tab(index: int, script_override: Script = null):
 	var tab_control: Control = scripts_tab_container.get_tab_control(index)
 	if tab_control == null:
 		return
 
-	var script: Script = tab_control.get("script")
+	var script: Script = script_override if script_override else tab_control.get("script")
 	if script:
 		var name: String = script.resource_path.get_file()
 		if name == "":
@@ -292,6 +292,8 @@ func _on_tab_changed(index: int):
 	var script: Script = script_editor.get_current_script()
 	if script:
 		emit_signal("script_tab_changed", script)
+
+	update_tab(index, script)
 
 func _on_script_text_changed():
 	if selected_tab == -1:
