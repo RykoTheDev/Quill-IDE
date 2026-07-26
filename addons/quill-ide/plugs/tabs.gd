@@ -195,13 +195,19 @@ func update_script_text_filter():
 		script_filter_txt.text_changed.emit(&"")
 
 func update_script_list_visibility():
+	if not scripts_item_list or not settings_manager:
+		return
 	scripts_item_list.get_parent().visible = settings_manager.is_script_list_visible
 
 func update_tabs():
+	if not scripts_tab_container:
+		return
 	for index: int in scripts_tab_container.get_tab_count():
 		update_tab(index)
 
 func update_tab(index: int, script_override: Script = null):
+	if not scripts_tab_container or not icon_manager:
+		return
 	var tab_control: Control = scripts_tab_container.get_tab_control(index)
 	if tab_control == null:
 		return
@@ -227,9 +233,13 @@ func update_tab(index: int, script_override: Script = null):
 			scripts_tab_container.set_tab_tooltip(index, scripts_item_list.get_item_tooltip(index))
 
 func update_tabs_position():
+	if not scripts_tab_container:
+		return
 	scripts_tab_container.tabs_position = TabContainer.POSITION_TOP
 
 func sync_tab_with_script_list():
+	if not scripts_item_list or not scripts_tab_bar:
+		return
 	if selected_tab >= scripts_item_list.item_count:
 		selected_tab = scripts_tab_bar.current_tab
 
@@ -259,7 +269,8 @@ func _on_tab_changed(index: int):
 	selected_tab = index
 
 	if old_script_editor_base != null:
-		old_script_editor_base.edited_script_changed.disconnect(_on_script_changed)
+		if old_script_editor_base.edited_script_changed.is_connected(_on_script_changed):
+			old_script_editor_base.edited_script_changed.disconnect(_on_script_changed)
 		var old_code_edit: CodeEdit = old_script_editor_base.get_base_editor()
 		if old_code_edit:
 			if old_code_edit.text_changed.is_connected(_on_script_text_changed):
@@ -270,16 +281,17 @@ func _on_tab_changed(index: int):
 	var script_editor_base: ScriptEditorBase = script_editor.get_current_editor()
 
 	if script_editor_base != null:
-		script_editor_base.edited_script_changed.connect(_on_script_changed)
+		if not script_editor_base.edited_script_changed.is_connected(_on_script_changed):
+			script_editor_base.edited_script_changed.connect(_on_script_changed)
 		old_script_editor_base = script_editor_base
 
 		var code_edit: CodeEdit = script_editor_base.get_base_editor()
-		if code_edit:
+		if code_edit and not code_edit.text_changed.is_connected(_on_script_text_changed):
 			code_edit.text_changed.connect(_on_script_text_changed)
 
 	sync_script_list = true
 
-	if settings_manager.is_auto_navigate_in_fs && script_editor.get_current_script() != null:
+	if settings_manager and settings_manager.is_auto_navigate_in_fs && script_editor.get_current_script() != null:
 		var file: String = script_editor.get_current_script().get_path()
 
 		if file.contains(BUILT_IN_SCRIPT):

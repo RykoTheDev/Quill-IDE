@@ -68,8 +68,12 @@ func _enter_tree() -> void:
 
 func _exit_tree() -> void:
 	var file_system: EditorFileSystem = EditorInterface.get_resource_filesystem()
-	file_system.filesystem_changed.disconnect(schedule_update)
-	EditorInterface.get_editor_settings().settings_changed.disconnect(_on_settings_changed)
+	if file_system and file_system.filesystem_changed.is_connected(schedule_update):
+		file_system.filesystem_changed.disconnect(schedule_update)
+
+	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
+	if editor_settings and editor_settings.settings_changed.is_connected(_on_settings_changed):
+		editor_settings.settings_changed.disconnect(_on_settings_changed)
 
 	if indent_guidelines_manager:
 		indent_guidelines_manager.cleanup()
@@ -90,7 +94,7 @@ func _shortcut_input(event: InputEvent) -> void:
 	if (!event.is_pressed() || event.is_echo()):
 		return
 
-	if (open_quick_search_popup_shc.matches_event(event)):
+	if open_quick_search_popup_shc and open_quick_search_popup_shc.matches_event(event):
 		if (quick_open_tween != null && quick_open_tween.is_running()):
 			get_viewport().set_input_as_handled()
 			if (quick_open_tween != null):
@@ -104,19 +108,19 @@ func _shortcut_input(event: InputEvent) -> void:
 			quick_open_tween = create_tween()
 			quick_open_tween.tween_interval(QUICK_OPEN_INTERVAL / 1000.0)
 			quick_open_tween.tween_callback(func(): quick_open_tween = null)
-	elif (open_quick_search_popup_scenes_shc.matches_event(event)):
+	elif open_quick_search_popup_scenes_shc and open_quick_search_popup_scenes_shc.matches_event(event):
 		get_viewport().set_input_as_handled()
 		open_quick_search_popup(QuickOpenPopup.Category.SCENES)
-	elif (open_quick_search_popup_gdscripts_shc.matches_event(event)):
+	elif open_quick_search_popup_gdscripts_shc and open_quick_search_popup_gdscripts_shc.matches_event(event):
 		get_viewport().set_input_as_handled()
 		open_quick_search_popup(QuickOpenPopup.Category.GDSCRIPTS)
-	elif (open_quick_search_popup_resources_shc.matches_event(event)):
+	elif open_quick_search_popup_resources_shc and open_quick_search_popup_resources_shc.matches_event(event):
 		get_viewport().set_input_as_handled()
 		open_quick_search_popup(QuickOpenPopup.Category.RESOURCES)
 
 func _input(event: InputEvent) -> void:
 	if (event is InputEventKey):
-		if (!open_quick_search_popup_shc.matches_event(event)):
+		if open_quick_search_popup_shc and !open_quick_search_popup_shc.matches_event(event):
 			if (quick_open_tween != null):
 				quick_open_tween.kill()
 				quick_open_tween = null
@@ -125,16 +129,22 @@ func schedule_update() -> void:
 	set_process(true)
 
 func update_editor() -> void:
-	tab_manager.update_editor()
-	outline_manager.update_editor()
+	if tab_manager:
+		tab_manager.update_editor()
+	if outline_manager:
+		outline_manager.update_editor()
 
 func _on_settings_changed() -> void:
 	var changed_settings: PackedStringArray = EditorInterface.get_editor_settings().get_changed_settings()
 
-	settings_manager.sync_settings(changed_settings)
-	icon_manager.handle_settings_change(changed_settings)
-	indent_guidelines_manager.handle_settings_change(changed_settings)
-	tab_manager.handle_settings_change(changed_settings, settings_manager)
+	if settings_manager:
+		settings_manager.sync_settings(changed_settings)
+	if icon_manager:
+		icon_manager.handle_settings_change(changed_settings)
+	if indent_guidelines_manager:
+		indent_guidelines_manager.handle_settings_change(changed_settings)
+	if tab_manager and settings_manager:
+		tab_manager.handle_settings_change(changed_settings, settings_manager)
 
 	sync_quick_open_settings(changed_settings)
 

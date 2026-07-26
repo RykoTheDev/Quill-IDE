@@ -99,19 +99,25 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 
 func cleanup():
 	if split_container != null:
-		if split_container != outline_container.get_parent():
+		if outline_container and split_container != outline_container.get_parent():
 			split_container.add_child(outline_container)
 
-		split_container.move_child(outline_container, 0)
+		if outline_container:
+			split_container.move_child(outline_container, 0)
 
 		if outline_filter_txt:
-			outline_filter_txt.gui_input.disconnect(_on_outline_filter_input)
-			outline_filter_txt.text_changed.disconnect(_on_outline_filter_changed)
+			if outline_filter_txt.gui_input.is_connected(_on_outline_filter_input):
+				outline_filter_txt.gui_input.disconnect(_on_outline_filter_input)
+			if outline_filter_txt.text_changed.is_connected(_on_outline_filter_changed):
+				outline_filter_txt.text_changed.disconnect(_on_outline_filter_changed)
 		if sort_btn:
-			sort_btn.pressed.disconnect(update_outline)
+			if sort_btn.pressed.is_connected(update_outline):
+				sort_btn.pressed.disconnect(update_outline)
 		if outline_tree:
-			outline_tree.item_selected.disconnect(_on_outline_item_selected)
-			outline_tree.item_collapsed.disconnect(_on_outline_item_collapsed)
+			if outline_tree.item_selected.is_connected(_on_outline_item_selected):
+				outline_tree.item_selected.disconnect(_on_outline_item_selected)
+			if outline_tree.item_collapsed.is_connected(_on_outline_item_collapsed):
+				outline_tree.item_collapsed.disconnect(_on_outline_item_collapsed)
 			if outline_tree.gui_input.is_connected(_on_outline_tree_gui_input):
 				outline_tree.gui_input.disconnect(_on_outline_tree_gui_input)
 			if context_menu:
@@ -140,6 +146,8 @@ func update_editor():
 	_update_bookmarks_ui()
 
 func _on_editor_settings_changed():
+	if not settings_manager:
+		return
 	var old_position: bool = settings_manager.is_outline_right
 	var old_hidden: bool = settings_manager.is_outline_hidden
 	settings_manager.sync_settings_all()
@@ -163,6 +171,8 @@ func _on_script_modified(script: Script):
 		_cleanup_stale_bookmarks()
 
 func update_outline_position():
+	if not settings_manager or not split_container or not outline_container:
+		return
 	if settings_manager.is_outline_right:
 		split_container.move_child(outline_container, 1)
 	else:
@@ -203,12 +213,14 @@ func update_outline_cache():
 		for_each_script_member(base_script, func(array: Array[String], item: String): array.erase(item))
 
 func for_each_script_member(script: Script, consumer: Callable):
+	var hide_private: bool = settings_manager.hide_private_members if settings_manager else false
+
 	for dict in script.get_script_method_list():
 		var func_name: String = dict[&"name"]
 		if keywords.has(func_name):
 			consumer.call(outline_cache.engine_funcs, func_name)
 		else:
-			if settings_manager.hide_private_members and func_name.begins_with(UNDERSCORE):
+			if hide_private and func_name.begins_with(UNDERSCORE):
 				continue
 			if func_name.begins_with(INLINE):
 				continue
@@ -216,7 +228,7 @@ func for_each_script_member(script: Script, consumer: Callable):
 
 	for dict in script.get_script_property_list():
 		var property_name: String = dict[&"name"]
-		if settings_manager.hide_private_members and property_name.begins_with(UNDERSCORE):
+		if hide_private and property_name.begins_with(UNDERSCORE):
 			continue
 
 		var usage: int = dict[&"usage"]
@@ -228,7 +240,7 @@ func for_each_script_member(script: Script, consumer: Callable):
 
 	for dict in script.get_property_list():
 		var property_name: String = dict[&"name"]
-		if settings_manager.hide_private_members and property_name.begins_with(UNDERSCORE):
+		if hide_private and property_name.begins_with(UNDERSCORE):
 			continue
 
 		var usage: int = dict[&"usage"]
@@ -240,7 +252,7 @@ func for_each_script_member(script: Script, consumer: Callable):
 		consumer.call(outline_cache.signals, signal_name)
 
 	for name_key in script.get_script_constant_map().keys():
-		if settings_manager.hide_private_members and name_key.begins_with(UNDERSCORE):
+		if hide_private and name_key.begins_with(UNDERSCORE):
 			continue
 		var obj: Variant = script.get_script_constant_map()[name_key]
 		if obj is GDScript and not obj.has_source_code():
@@ -251,6 +263,8 @@ func for_each_script_member(script: Script, consumer: Callable):
 func update_outline():
 	if not outline_tree or not outline_root:
 		return
+	if not icon_manager or not settings_manager:
+		return
 
 	outline_tree.clear()
 	outline_root = outline_tree.create_item()
@@ -259,7 +273,7 @@ func update_outline():
 	if outline_cache == null:
 		return
 
-	var filter_text: String = outline_filter_txt.get_text().to_lower()
+	var filter_text: String = outline_filter_txt.get_text().to_lower() if outline_filter_txt else ""
 
 	var categories_data = [
 		{&"name": ENGINE_FUNCS, &"items": outline_cache.engine_funcs, &"icon": icon_manager.engine_func_icon, &"type": &"func", &"enabled": settings_manager.show_engine_funcs},
@@ -883,7 +897,12 @@ func _scroll_to_top():
 	if not script:
 		return
 
-	var code_edit: CodeEdit = EditorInterface.get_script_editor().get_current_editor().get_base_editor()
+	var editor_base: ScriptEditorBase = EditorInterface.get_script_editor().get_current_editor()
+	if not editor_base:
+		return
+	var code_edit: CodeEdit = editor_base.get_base_editor()
+	if not code_edit:
+		return
 	code_edit.set_caret_line(0)
 	code_edit.set_v_scroll(0)
 	code_edit.set_caret_column(0)
@@ -898,7 +917,12 @@ func _scroll_to_bottom():
 	var lines: PackedStringArray = script.get_source_code().split("\n")
 	var last_index: int = lines.size() - 1
 
-	var code_edit: CodeEdit = EditorInterface.get_script_editor().get_current_editor().get_base_editor()
+	var editor_base: ScriptEditorBase = EditorInterface.get_script_editor().get_current_editor()
+	if not editor_base:
+		return
+	var code_edit: CodeEdit = editor_base.get_base_editor()
+	if not code_edit:
+		return
 	code_edit.set_caret_line(last_index)
 	code_edit.set_v_scroll(last_index)
 	code_edit.set_caret_column(lines[last_index].length())

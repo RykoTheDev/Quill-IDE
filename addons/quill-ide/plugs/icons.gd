@@ -43,18 +43,24 @@ func get_func_icon(func_name: String) -> Texture2D:
 	return icon
 
 func get_icon_for_script(script: Script) -> Texture2D:
-	if script == null:
+	var editor_theme: Theme = EditorInterface.get_editor_theme()
+	if editor_theme == null:
 		return class_icon
 
-	# For C# scripts, try to get the built-in editor icon
+	# GDScript check covers both file-based (.gd) and built-in (::GDScript) scripts
+	if script == null or script is GDScript:
+		var gd_icon: Texture2D = editor_theme.get_icon("GDScript", "EditorIcons")
+		return gd_icon if gd_icon else class_icon
+
+	# C# scripts
 	var path: String = script.resource_path
 	if path.ends_with(".cs"):
-		var cs_icon: Texture2D = EditorInterface.get_editor_theme().get_icon("CSharpScript", "EditorIcons")
-		if cs_icon:
-			return cs_icon
+		var cs_icon: Texture2D = editor_theme.get_icon("CSharpScript", "EditorIcons")
+		return cs_icon if cs_icon else class_icon
 
-	# Default to class icon for GDScript and all other script types
-	return class_icon
+	# Fallback for other script types
+	var script_icon: Texture2D = editor_theme.get_icon("Script", "EditorIcons")
+	return script_icon if script_icon else class_icon
 
 func handle_settings_change(changed_settings: PackedStringArray) -> void:
 	for setting: String in changed_settings:
