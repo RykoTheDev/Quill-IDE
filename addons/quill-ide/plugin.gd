@@ -21,7 +21,6 @@ const OPEN_QUICK_SEARCH_POPUP_RESOURCES: StringName = QUICK_OPEN + &"open_quick_
 const TAB_CYCLE_FORWARD: StringName = QUICK_OPEN + &"tab_cycle_forward"
 const TAB_CYCLE_BACKWARD: StringName = QUICK_OPEN + &"tab_cycle_backward"
 
-
 var settings_manager: QuillSettingsManager
 var tab_manager: TabManager
 var outline_manager: OutlineManager

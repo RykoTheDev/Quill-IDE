@@ -226,9 +226,22 @@ func update_tab(index: int, script_override: Script = null):
 		scripts_tab_container.set_tab_icon(index, icon)
 		scripts_tab_container.set_tab_tooltip(index, script.resource_path)
 	else:
-		if index < scripts_item_list.item_count:
-			var title = scripts_item_list.get_item_text(index)
-			scripts_tab_container.set_tab_title(index, title)
+		# Fallback: find the matching ItemList entry by resource path metadata
+		# instead of by index, because the ItemList and TabContainer order can differ
+		# (e.g. when tabs are rearranged or scripts opened/closed).
+		var res_path: String = get_res_path(index)
+		if res_path != "" and scripts_item_list:
+			for i in range(scripts_item_list.item_count):
+				var item_path: String = str(scripts_item_list.get_item_metadata(i))
+				if item_path == res_path:
+					scripts_tab_container.set_tab_title(index, scripts_item_list.get_item_text(i))
+					scripts_tab_container.set_tab_icon(index, scripts_item_list.get_item_icon(i))
+					scripts_tab_container.set_tab_tooltip(index, res_path)
+					return
+
+		# Ultimate fallback: use ItemList at the same index (may be wrong if order differs)
+		if scripts_item_list and index < scripts_item_list.item_count:
+			scripts_tab_container.set_tab_title(index, scripts_item_list.get_item_text(index))
 			scripts_tab_container.set_tab_icon(index, scripts_item_list.get_item_icon(index))
 			scripts_tab_container.set_tab_tooltip(index, scripts_item_list.get_item_tooltip(index))
 
@@ -320,10 +333,20 @@ func _on_script_changed():
 
 func _on_tab_close(tab_idx: int):
 	update_script_text_filter()
+
+	# Disconnect tab_changed temporarily to prevent a double _on_tab_changed call.
+	# simulate_item_clicked triggers Godot's script close, which may fire tab_changed
+	# and call _on_tab_changed. We let the manual call below handle it once.
+	var was_connected: bool = scripts_tab_bar.tab_changed.is_connected(_on_tab_changed)
+	if was_connected:
+		scripts_tab_bar.tab_changed.disconnect(_on_tab_changed)
+
 	simulate_item_clicked(tab_idx, MOUSE_BUTTON_MIDDLE)
 
-	selected_tab = scripts_tab_bar.current_tab
+	if was_connected and not scripts_tab_bar.tab_changed.is_connected(_on_tab_changed):
+		scripts_tab_bar.tab_changed.connect(_on_tab_changed)
 
+	selected_tab = scripts_tab_bar.current_tab
 	_on_tab_changed(selected_tab)
 	call_deferred("update_tabs")
 
