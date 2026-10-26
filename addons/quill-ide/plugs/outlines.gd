@@ -15,11 +15,16 @@ const CLASSES: StringName = &"Classes"
 const CONSTANTS: StringName = &"Constants"
 const BOOKMARKS: StringName = &"Bookmarks"
 const MAX_BOOKMARKS_HEIGHT: int = 150
+const DEFAULT_OUTLINE_WIDTH: int = 250
 
 var outline_container: Control
 var outline_parent: Control
 var split_container: HSplitContainer
-var old_outline: ItemList
+var editor_container: Control
+var outline_size_flags: int
+var editor_size_flags: int
+var outline_width: int = 0
+var old_outline: Control
 var outline_filter_txt: LineEdit
 var sort_btn: Button
 var outline_tree: Tree
@@ -47,16 +52,42 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	settings_manager = settings_mgr
 	icon_manager = icon_mgr
 
-	EditorInterface.get_editor_settings().settings_changed.connect(_on_editor_settings_changed)
-
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
 	split_container = find_or_null(script_editor.find_children("*", "HSplitContainer", true, false))
+	if not split_container or split_container.get_child_count() == 0:
+		return
 	outline_container = split_container.get_child(0)
+
+	# Look up every required node before touching the editor UI, so a failed init leaves it intact.
+	var found_outline: Control = _find_native_outline()
+	var found_filter: LineEdit = null
+	var found_sort: Button = null
+	if found_outline:
+		var overview_panel: Node = found_outline.get_parent()
+		found_filter = find_or_null(overview_panel.find_children("*", "LineEdit", true, false))
+		found_sort = find_or_null(overview_panel.find_children("*", "Button", true, false))
+	if not found_outline or not found_filter or not found_sort:
+		outline_container = null
+		split_container = null
+		return
+
+	EditorInterface.get_editor_settings().settings_changed.connect(_on_editor_settings_changed)
+
+	editor_container = split_container.get_child(1) if split_container.get_child_count() > 1 else null
+	outline_size_flags = outline_container.size_flags_horizontal
+	if editor_container:
+		editor_size_flags = editor_container.size_flags_horizontal
+	# With the outline on the left, Godot's split offset is the panel width.
+	if outline_width <= 0:
+		outline_width = split_container.split_offset if split_container.split_offset > 0 else roundi(DEFAULT_OUTLINE_WIDTH * EditorInterface.get_editor_scale())
+	split_container.dragged.connect(_on_split_dragged)
+
 	if settings_manager.is_outline_right:
 		update_outline_position()
 
-	old_outline = find_or_null(outline_container.find_children("*", "ItemList", true, false), 1)
+	old_outline = found_outline
 	outline_parent = old_outline.get_parent()
+	var old_outline_index: int = old_outline.get_index()
 	outline_parent.remove_child(old_outline)
 
 	outline_tree = Tree.new()
@@ -67,6 +98,7 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	outline_tree.scroll_horizontal_enabled = true
 	outline_tree.scroll_vertical_enabled = true
 	outline_parent.add_child(outline_tree)
+	outline_parent.move_child(outline_tree, old_outline_index)
 	outline_tree.item_selected.connect(_on_outline_item_selected)
 	outline_tree.item_collapsed.connect(_on_outline_item_collapsed)
 	outline_tree.gui_input.connect(_on_outline_tree_gui_input)
@@ -78,11 +110,11 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 
 	outline_root = outline_tree.create_item()
 
-	outline_filter_txt = find_or_null(outline_container.find_children("*", "LineEdit", true, false), 1)
+	outline_filter_txt = found_filter
 	outline_filter_txt.gui_input.connect(_on_outline_filter_input)
 	outline_filter_txt.text_changed.connect(_on_outline_filter_changed)
 
-	sort_btn = find_or_null(outline_container.find_children("*", "Button", true, false))
+	sort_btn = found_sort
 	sort_btn.pressed.connect(update_outline)
 
 	if not script_editor.editor_script_changed.is_connected(_on_active_script_changed):
@@ -104,6 +136,13 @@ func cleanup():
 
 		if outline_container:
 			split_container.move_child(outline_container, 0)
+			outline_container.size_flags_horizontal = outline_size_flags
+			if editor_container:
+				editor_container.size_flags_horizontal = editor_size_flags
+			split_container.split_offset = outline_width
+
+		if split_container.dragged.is_connected(_on_split_dragged):
+			split_container.dragged.disconnect(_on_split_dragged)
 
 		if outline_filter_txt:
 			if outline_filter_txt.gui_input.is_connected(_on_outline_filter_input):
@@ -125,9 +164,9 @@ func cleanup():
 				context_menu = null
 
 		if outline_parent and outline_tree:
-			outline_parent.remove_child(outline_tree)
 			outline_parent.add_child(old_outline)
-			outline_parent.move_child(old_outline, 2)
+			outline_parent.move_child(old_outline, outline_tree.get_index())
+			outline_parent.remove_child(outline_tree)
 			outline_tree.free()
 
 		if bookmarks_container:
@@ -141,6 +180,8 @@ func cleanup():
 			scroll_button_container = null
 
 func update_editor():
+	if not outline_tree:
+		return
 	update_outline_cache()
 	update_outline()
 	_update_bookmarks_ui()
@@ -161,6 +202,8 @@ func _on_editor_settings_changed():
 
 
 func _on_active_script_changed(script: Script):
+	if not outline_tree:
+		return
 	update_outline_cache()
 	update_outline()
 
@@ -173,10 +216,23 @@ func _on_script_modified(script: Script):
 func update_outline_position():
 	if not settings_manager or not split_container or not outline_container:
 		return
+	# Split offsets are relative to a default position that depends on which side expands, so pin it:
+	# on the right the code editor expands and the offset is measured back from the end.
 	if settings_manager.is_outline_right:
 		split_container.move_child(outline_container, 1)
+		outline_container.size_flags_horizontal = outline_size_flags & ~Control.SIZE_EXPAND
+		if editor_container:
+			editor_container.size_flags_horizontal = editor_size_flags | Control.SIZE_EXPAND
+		split_container.split_offset = -outline_width
 	else:
 		split_container.move_child(outline_container, 0)
+		outline_container.size_flags_horizontal = outline_size_flags
+		if editor_container:
+			editor_container.size_flags_horizontal = editor_size_flags
+		split_container.split_offset = outline_width
+
+func _on_split_dragged(offset: int):
+	outline_width = absi(offset)
 
 func update_keywords(script: Script):
 	if script == null:
@@ -930,8 +986,16 @@ func _scroll_to_bottom():
 	code_edit.grab_focus()
 
 
+# Godot 4.8+ shows members in a DocumentOutline (VBox with filter/sort row + Tree) below the DocumentList.
+# Older versions use an ItemList for members, after the script list ItemList.
+func _find_native_outline() -> Control:
+	var trees: Array[Node] = outline_container.find_children("*", "Tree", true, false)
+	if not trees.is_empty():
+		return trees[0]
+	return find_or_null(outline_container.find_children("*", "ItemList", true, false), 1)
+
 func find_or_null(arr: Array[Node], index: int = 0) -> Node:
-	if arr.is_empty():
+	if index >= arr.size():
 		push_error("Required node not found for Script-IDE Outline Manager")
 		return null
 	return arr[index]

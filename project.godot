@@ -15,8 +15,8 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 [application]
 
 config/name="Quill-IDE"
-config/tags=PackedStringArray("commercial", "tool")
-config/features=PackedStringArray("4.7")
+config/tags=PackedStringArray("addon")
+config/features=PackedStringArray("4.8")
 
 [editor_plugins]
 

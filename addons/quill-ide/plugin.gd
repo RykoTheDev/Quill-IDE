@@ -124,6 +124,19 @@ func _input(event: InputEvent) -> void:
 				quick_open_tween.kill()
 				quick_open_tween = null
 
+func _get_window_layout(configuration: ConfigFile) -> void:
+	if outline_manager and outline_manager.outline_width > 0:
+		configuration.set_value("Quill-IDE", "outline_width", outline_manager.outline_width)
+
+# Runs after the script editor restores its own split offset, which assumes the outline is on the left.
+func _set_window_layout(configuration: ConfigFile) -> void:
+	if not outline_manager:
+		return
+	var width: int = configuration.get_value("Quill-IDE", "outline_width", 0)
+	if width > 0:
+		outline_manager.outline_width = width
+	outline_manager.update_outline_position.call_deferred()
+
 func schedule_update() -> void:
 	set_process(true)
 
