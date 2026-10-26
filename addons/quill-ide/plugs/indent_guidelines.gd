@@ -48,7 +48,7 @@ var guideline_keep_caret: bool = true
 var guideline_y_offset: float
 var guideline_draw_root_guides: bool = false
 
-var draw_foldmarks: bool = true
+var draw_foldmarks: bool = false
 var foldmark_color: Color = Color(0.9, 0.9, 0.9, 0.9)
 var foldmark_width: float = 3.0
 var foldmark_x_offset: float = -3.0
