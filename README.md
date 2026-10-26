@@ -75,6 +75,8 @@ Think of it as **Godot's Script Editor — but sleeker and way more customizable
   Colour by keyword or by nesting depth, and the block your caret is in is drawn thicker. Godot's tab markers are hidden while guides are on (optional).
 
 ### General
+- 🧘 **Zen mode**  
+  `Alt+Z` hides everything but the code: docks, bottom panel, top bar, scene tabs, the script editor's menu bar, script list, outline, tabs and breadcrumbs, and (optionally) goes fullscreen. `Alt+Z` again puts it all back as it was.
 - 🎨 **Custom Styling**  
   Modern tab design with rounded corners, hover/focus effects, and editor-theme-aware colors.  
 - ⚡ **Better Workflow Integration**  
@@ -100,6 +102,7 @@ All of these can be changed in **Editor Settings → Quill**.
 | Find usages of the word under the caret | `Shift+F12` |
 | Pin / unpin current tab | `Alt+P` |
 | Toggle split view | `Alt+S` |
+| Toggle Zen mode | `Alt+Z` |
 
 ---
 
@@ -133,6 +136,7 @@ That’s it — your script editor now levels up! ⚡
 - Smooth caret (glide / trail / ease out, fading blink, smooth scrolling) with an on/off switch.
 - Pinned tabs, tab groups (by folder or named), saved sessions, sessions per git branch.
 - Split view.
+- Zen mode (code only, optional fullscreen).
 - "Close Tabs to the Left / Right" and "Move Tab Left / Right" in the tab right-click menu.
 - One startup notice listing anything that couldn't hook into the editor, instead of error spam.
 
@@ -163,6 +167,7 @@ That’s it — your script editor now levels up! ⚡
 - **Tab right-click menu** rewording only recognises the English editor labels; in other languages the menu stays as Godot builds it.
 - **Smooth caret** steps aside for the block caret style and overtype (Insert) mode and shows Godot's own caret there.
 - **Signal connections in the outline** only show connections made in the editor; ones made with `.connect()` in code exist only while the game runs (Find Usages covers those).
+- **Zen mode** is toggled from the Script screen (like the other Quill shortcuts). Editor parts are found by their internal names, so anything a Godot version doesn't have is simply left as is.
 - **Sort Script Members** won't sort a script that uses `#region` at the top level, or where moving a variable would change what it's initialised to.
 
 ## ⚙️ Settings
@@ -176,11 +181,12 @@ All changes apply instantly without restarting the editor.
 |---|---|
 | `Quill/General` | Script list, tabs, minimalism, breadcrumbs, `scan_addons` (include `res://addons` in the TODO scan) |
 | `Quill/Outline` | Position, order, categories, `follow_cursor`, `show_todos` |
-| `Quill/Navigation` | Back/forward, bookmarks, find usages, pin tab, split view shortcuts |
+| `Quill/Navigation` | Back/forward, bookmarks, find usages, pin tab, split view, Zen mode shortcuts |
 | `Quill/QuickOpen` | Quick open shortcuts |
 | `Quill/IndentGuidelines` | Guides, rainbow mode, active width, `general/show_tab_markers`, fold marks |
 | `Quill/SmoothCaret` | `enabled`, mode, motion, durations, speed, blink style, smooth scroll |
 | `Quill/Sessions` | `per_branch`, `close_others_on_load` |
+| `Quill/Zen` | `fullscreen` (go fullscreen in Zen mode) |
 
 Pins, groups, sessions and recent files are stored per project on your machine (editor project metadata), never in the repository.
 

@@ -17,6 +17,7 @@ const UsagesPopup = preload("res://addons/quill-ide/plugs/usages_popup.gd")
 const SmoothCaretManager = preload("res://addons/quill-ide/plugs/smooth_caret_manager.gd")
 const TabExtras = preload("res://addons/quill-ide/plugs/tab_extras.gd")
 const SplitView = preload("res://addons/quill-ide/plugs/split_view.gd")
+const ZenMode = preload("res://addons/quill-ide/plugs/zen_mode.gd")
 
 const QUICK_OPEN_SCENE: PackedScene = preload("res://addons/quill-ide/plugs/quick_open.tscn")
 #TODO dsada
@@ -38,6 +39,7 @@ const PREVIOUS_BOOKMARK: StringName = NAVIGATION + &"previous_bookmark"
 const FIND_USAGES: StringName = NAVIGATION + &"find_usages"
 const TOGGLE_PIN: StringName = NAVIGATION + &"toggle_pin_tab"
 const TOGGLE_SPLIT: StringName = NAVIGATION + &"toggle_split_view"
+const TOGGLE_ZEN: StringName = NAVIGATION + &"toggle_zen_mode"
 
 var settings_manager: QuillSettingsManager
 var tab_manager: TabManager
@@ -52,6 +54,7 @@ var usages_popup: UsagesPopup
 var smooth_caret_manager: SmoothCaretManager
 var tab_extras: TabExtras
 var split_view: SplitView
+var zen_mode: ZenMode
 
 var quick_open_popup: QuickOpenPopup
 var quick_open_tween: Tween
@@ -70,6 +73,7 @@ var previous_bookmark_shc: Shortcut
 var find_usages_shc: Shortcut
 var toggle_pin_shc: Shortcut
 var toggle_split_shc: Shortcut
+var toggle_zen_shc: Shortcut
 
 
 func _enter_tree() -> void:
@@ -86,6 +90,9 @@ func _enter_tree() -> void:
 
 	smooth_caret_manager = SmoothCaretManager.new()
 	smooth_caret_manager.init()
+
+	zen_mode = ZenMode.new()
+	zen_mode.init(settings_manager, hide_bottom_panel)
 
 	# Each of these hooks into the editor's own UI. If one can't find what it needs (usually after
 	# an engine update moved things around) only that feature is switched off, and we say so once.
@@ -164,6 +171,10 @@ func _enter_tree() -> void:
 		ProjectFiles.toast("Quill IDE couldn't find parts of the script editor it needs, so these are turned off: %s. Everything else works. (Usually caused by a Godot update; restarting the editor can also help.)" % ", ".join(failed_features))
 
 func _exit_tree() -> void:
+	if zen_mode:
+		zen_mode.cleanup()
+		zen_mode = null
+
 	var file_system: EditorFileSystem = EditorInterface.get_resource_filesystem()
 	if file_system and file_system.filesystem_changed.is_connected(schedule_update):
 		file_system.filesystem_changed.disconnect(schedule_update)
@@ -278,6 +289,8 @@ func _handle_navigation_input(event: InputEvent) -> void:
 		if tab_extras: tab_extras.toggle_pin_current()
 	elif toggle_split_shc and toggle_split_shc.matches_event(event):
 		if split_view: split_view.toggle()
+	elif toggle_zen_shc and toggle_zen_shc.matches_event(event):
+		if zen_mode: zen_mode.toggle()
 	else:
 		handled = false
 
@@ -428,6 +441,7 @@ func sync_navigation_settings(changed_settings: PackedStringArray) -> void:
 			FIND_USAGES: find_usages_shc = editor_settings.get_setting(FIND_USAGES)
 			TOGGLE_PIN: toggle_pin_shc = editor_settings.get_setting(TOGGLE_PIN)
 			TOGGLE_SPLIT: toggle_split_shc = editor_settings.get_setting(TOGGLE_SPLIT)
+			TOGGLE_ZEN: toggle_zen_shc = editor_settings.get_setting(TOGGLE_ZEN)
 
 func get_current_script() -> Script:
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
@@ -579,6 +593,7 @@ func init_quick_open_shortcuts() -> void:
 	# keyboard layouts backslash needs AltGr anyway. A briefly shipped Ctrl+\ default is replaced.
 	_replace_old_default(TOGGLE_SPLIT, KEY_BACKSLASH)
 	toggle_split_shc = ensure_shortcut(TOGGLE_SPLIT, KEY_S, true, false)
+	toggle_zen_shc = ensure_shortcut(TOGGLE_ZEN, KEY_Z, true, false)
 
 # Drops a stored shortcut that still has an old default key, so ensure_shortcut writes the new one.
 func _replace_old_default(setting: StringName, old_keycode: Key) -> void:

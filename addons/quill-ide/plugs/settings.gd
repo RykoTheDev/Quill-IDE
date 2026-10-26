@@ -36,6 +36,10 @@ const SESSION_PER_BRANCH: StringName = SESSIONS + &"per_branch"
 # Loading a session closes tabs that aren't part of it (pinned tabs always stay).
 const SESSION_CLOSE_OTHERS: StringName = SESSIONS + &"close_others_on_load"
 
+const ZEN: StringName = GODOT_IDE + &"Zen/"
+# Zen mode also makes the editor window fullscreen (and puts it back on leaving).
+const ZEN_FULLSCREEN: StringName = ZEN + &"fullscreen"
+
 var is_outline_right: bool = true
 var is_script_list_visible: bool = false
 var hide_private_members: bool = false
@@ -51,6 +55,7 @@ var scan_addons: bool = false
 var show_todos: bool = true
 var session_per_branch: bool = false
 var session_close_others: bool = true
+var zen_fullscreen: bool = true
 var outline_order: PackedStringArray
 
 var suppress_settings_sync: bool = false
@@ -80,6 +85,7 @@ func init_settings():
 	show_todos = get_setting(SHOW_TODOS, show_todos)
 	session_per_branch = get_setting(SESSION_PER_BRANCH, session_per_branch)
 	session_close_others = get_setting(SESSION_CLOSE_OTHERS, session_close_others)
+	zen_fullscreen = get_setting(ZEN_FULLSCREEN, zen_fullscreen)
 	init_outline_order()
 	collapsed_categories = load_collapsed_categories()
 	bookmarks = load_bookmarks()
@@ -124,6 +130,7 @@ func sync_settings(changed_settings: PackedStringArray):
 			SHOW_TODOS: show_todos = get_setting(setting, show_todos)
 			SESSION_PER_BRANCH: session_per_branch = get_setting(setting, session_per_branch)
 			SESSION_CLOSE_OTHERS: session_close_others = get_setting(setting, session_close_others)
+			ZEN_FULLSCREEN: zen_fullscreen = get_setting(setting, zen_fullscreen)
 			SHOW_FUNCS: show_funcs = get_setting(setting, show_funcs)
 			SHOW_SIGNALS: show_signals = get_setting(setting, show_signals)
 			SHOW_CONSTANTS: show_constants = get_setting(setting, show_constants)
@@ -149,6 +156,7 @@ func sync_settings_all():
 	show_todos = get_setting(SHOW_TODOS, show_todos)
 	session_per_branch = get_setting(SESSION_PER_BRANCH, session_per_branch)
 	session_close_others = get_setting(SESSION_CLOSE_OTHERS, session_close_others)
+	zen_fullscreen = get_setting(ZEN_FULLSCREEN, zen_fullscreen)
 	init_outline_order()
 	collapsed_categories = load_collapsed_categories()
 	bookmarks = load_bookmarks()
