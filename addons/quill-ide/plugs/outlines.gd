@@ -44,6 +44,11 @@ var bookmarks_tree: Tree
 var bookmarks_root: TreeItem
 var bookmarks_context_menu: PopupMenu
 var bookmarks_remove_all_btn: Button
+var bookmark_rename_dialog: AcceptDialog
+var bookmark_rename_txt: LineEdit
+var bookmark_rename_target: Dictionary = {}
+# Where next/previous bookmark left off (index into settings_manager.bookmarks).
+var bookmark_cursor: int = -1
 
 var outline_cache: OutlineCache
 var keywords: Dictionary[String, bool] = {}
@@ -62,7 +67,7 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 		return
 	outline_container = split_container.get_child(0)
 
-	# Look up every required node before touching the editor UI, so a failed init leaves it intact.
+	# Find everything first, so if something's missing we bail before changing the editor UI.
 	var found_outline: Control = _find_native_outline()
 	var found_filter: LineEdit = null
 	var found_sort: Button = null
@@ -220,8 +225,8 @@ func _on_script_modified(script: Script):
 func update_outline_position():
 	if not settings_manager or not split_container or not outline_container:
 		return
-	# Split offsets are relative to a default position that depends on which side expands, so pin it:
-	# on the right the code editor expands and the offset is measured back from the end.
+	# Godot measures split_offset from a default that depends on which child expands. On the
+	# right we make the code editor expand, so the offset counts back from the end instead.
 	if settings_manager.is_outline_right:
 		split_container.move_child(outline_container, 1)
 		outline_container.size_flags_horizontal = outline_size_flags & ~Control.SIZE_EXPAND
@@ -268,6 +273,7 @@ func update_outline_cache():
 	outline_cache = OutlineCache.new()
 	for_each_script_member(script, func(array: Array[String], item: String): array.append(item))
 
+	# Only show what this script declares itself, not what it inherits.
 	var base_script: Script = script.get_base_script()
 	if base_script != null:
 		for_each_script_member(base_script, func(array: Array[String], item: String): array.erase(item))
@@ -293,6 +299,7 @@ func for_each_script_member(script: Script, consumer: Callable):
 
 		var usage: int = dict[&"usage"]
 		if usage & PROPERTY_USAGE_SCRIPT_VARIABLE:
+			# Stored + shown in the inspector = @export.
 			if usage & PROPERTY_USAGE_STORAGE and usage & PROPERTY_USAGE_EDITOR:
 				consumer.call(outline_cache.exports, property_name)
 			else:
@@ -315,6 +322,7 @@ func for_each_script_member(script: Script, consumer: Callable):
 		if hide_private and name_key.begins_with(UNDERSCORE):
 			continue
 		var obj: Variant = script.get_script_constant_map()[name_key]
+		# Inner classes show up as constants holding a GDScript with no source of their own.
 		if obj is GDScript and not obj.has_source_code():
 			consumer.call(outline_cache.classes, name_key)
 		else:
@@ -392,7 +400,7 @@ func follow_symbol(symbol_name: String):
 	followed_symbol = symbol_name
 	_apply_followed_symbol(true)
 
-# Highlights with a background colour rather than selecting, since selecting navigates to the item.
+# Uses a bg colour instead of selecting, because selecting an item jumps the editor to it.
 func _apply_followed_symbol(scroll: bool):
 	if not outline_tree:
 		return
@@ -407,7 +415,7 @@ func _apply_followed_symbol(scroll: bool):
 		for item: TreeItem in category_item.get_children():
 			if item.get_text(0) != followed_symbol:
 				continue
-			# Inside a collapsed category, mark the category so the location is still visible.
+			# Collapsed category, so mark the category instead.
 			highlighted_item = category_item if category_item.collapsed else item
 			var color: Color = icon_manager.get_editor_accent_color()
 			color.a = 0.25
@@ -424,6 +432,8 @@ func get_category_order(category_name: StringName) -> int:
 func get_category_collapsed_state(category_name: StringName) -> bool:
 	return settings_manager.collapsed_categories.has(category_name)
 
+# We only know a member's name, not its line, so search the source for its declaration.
+# Plain text match on purpose; it's good enough and doesn't need the parser.
 func find_and_goto_line(name: String, type: StringName, modifier: StringName, script: Script) -> void:
 	if not script:
 		return
@@ -569,6 +579,14 @@ func _show_bookmarks_context_menu(item: TreeItem, at_position: Vector2):
 	var item_icon: Texture2D = item.get_icon(0)
 	bookmarks_context_menu.set_meta(&"target_item", item)
 	bookmarks_context_menu.add_icon_item(item_icon, "Remove Bookmark", 0)
+	bookmarks_context_menu.add_item("Rename...", 1)
+	bookmarks_context_menu.add_separator()
+	bookmarks_context_menu.add_item("Move Up", 2)
+	bookmarks_context_menu.add_item("Move Down", 3)
+
+	var index: int = settings_manager.find_bookmark(metadata[&"script_path"], metadata[&"bookmark_name"])
+	bookmarks_context_menu.set_item_disabled(bookmarks_context_menu.get_item_index(2), index <= 0)
+	bookmarks_context_menu.set_item_disabled(bookmarks_context_menu.get_item_index(3), index == -1 or index >= settings_manager.bookmarks.size() - 1)
 
 	bookmarks_context_menu.position = Vector2i(bookmarks_tree.get_screen_position()) + Vector2i(at_position)
 	bookmarks_context_menu.popup()
@@ -579,13 +597,64 @@ func _on_bookmarks_context_menu_id_pressed(id: int):
 		return
 
 	var metadata: Dictionary = item.get_metadata(0)
+	var script_path: String = metadata[&"script_path"]
+	var bookmark_name: String = metadata[&"bookmark_name"]
 
-	if id == 0:
-		settings_manager.remove_bookmark(
-			metadata[&"script_path"],
-			metadata[&"bookmark_name"]
-		)
+	match id:
+		0: settings_manager.remove_bookmark(script_path, bookmark_name)
+		1:
+			_show_bookmark_rename_dialog(metadata)
+			return
+		2: settings_manager.move_bookmark(script_path, bookmark_name, -1)
+		3: settings_manager.move_bookmark(script_path, bookmark_name, 1)
 	_update_bookmarks_ui()
+
+func _show_bookmark_rename_dialog(metadata: Dictionary):
+	bookmark_rename_target = metadata
+	var index: int = settings_manager.find_bookmark(metadata[&"script_path"], metadata[&"bookmark_name"])
+	bookmark_rename_txt.text = settings_manager.bookmarks[index].get(&"label", "") if index != -1 else ""
+	bookmark_rename_txt.placeholder_text = metadata[&"bookmark_name"]
+	bookmark_rename_dialog.popup_centered(Vector2i(Vector2(320, 0) * EditorInterface.get_editor_scale()))
+	bookmark_rename_txt.select_all()
+	bookmark_rename_txt.grab_focus.call_deferred()
+
+func _on_bookmark_rename_confirmed():
+	if bookmark_rename_target.is_empty():
+		return
+	settings_manager.set_bookmark_label(bookmark_rename_target[&"script_path"], bookmark_rename_target[&"bookmark_name"], bookmark_rename_txt.text)
+	bookmark_rename_target = {}
+	_update_bookmarks_ui()
+
+## Adds or removes a bookmark on a member of the current script.
+func toggle_bookmark(name: String, type: StringName, modifier: StringName):
+	var script: Script = EditorInterface.get_script_editor().get_current_script()
+	if not script or script.resource_path.is_empty() or name.is_empty():
+		return
+	if settings_manager.is_bookmarked(script.resource_path, name):
+		settings_manager.remove_bookmark(script.resource_path, name)
+	else:
+		settings_manager.add_bookmark(script.resource_path, name, type, modifier)
+	_update_bookmarks_ui()
+
+## step is 1 for next, -1 for previous. Wraps around and goes across scripts.
+func goto_next_bookmark(step: int):
+	var count: int = settings_manager.bookmarks.size()
+	if count == 0:
+		return
+	if bookmark_cursor == -1:
+		bookmark_cursor = 0 if step > 0 else count - 1
+	else:
+		bookmark_cursor = posmod(bookmark_cursor + step, count)
+	_navigate_to_bookmark(_get_bookmark_metadata(settings_manager.bookmarks[bookmark_cursor]))
+
+func _get_bookmark_metadata(bookmark: Dictionary) -> Dictionary:
+	return {
+		&"is_bookmark": true,
+		&"script_path": bookmark[&"script_path"],
+		&"bookmark_name": bookmark[&"name"],
+		&"type": bookmark.get(&"type", &"func"),
+		&"modifier": bookmark.get(&"modifier", &"")
+	}
 
 func _navigate_to_bookmark(metadata: Dictionary) -> void:
 	var script_path: String = metadata.get(&"script_path", &"")
@@ -595,6 +664,7 @@ func _navigate_to_bookmark(metadata: Dictionary) -> void:
 	if not script:
 		return
 	EditorInterface.edit_resource(script)
+	# Give the script editor a frame to actually switch before we move the caret.
 	call_deferred("_navigate_to_bookmark_deferred", metadata)
 
 func _navigate_to_bookmark_deferred(metadata: Dictionary) -> void:
@@ -687,6 +757,14 @@ func _add_bookmarks_section():
 	bookmarks_context_menu.id_pressed.connect(_on_bookmarks_context_menu_id_pressed)
 	bookmarks_context_menu.set_meta(&"target_item", null)
 
+	bookmark_rename_dialog = AcceptDialog.new()
+	bookmark_rename_dialog.title = "Rename Bookmark"
+	bookmark_rename_txt = LineEdit.new()
+	bookmark_rename_dialog.add_child(bookmark_rename_txt)
+	bookmark_rename_dialog.register_text_enter(bookmark_rename_txt)
+	bookmark_rename_dialog.confirmed.connect(_on_bookmark_rename_confirmed)
+	bookmarks_tree.add_child(bookmark_rename_dialog)
+
 	outline_parent.add_child(bookmarks_container)
 	var scroll_idx: int = outline_parent.get_child_count() - 1
 	outline_parent.move_child(bookmarks_container, scroll_idx)
@@ -721,10 +799,12 @@ func _update_bookmarks_ui():
 
 	for bookmark in bookmarks_data:
 		var script_filename: String = bookmark[&"script_path"].get_file()
-		var display_text: String = script_filename + " > " + bookmark[&"name"]
+		var location_text: String = script_filename + " > " + bookmark[&"name"]
+		var label: String = bookmark.get(&"label", "")
 
 		var bm_item: TreeItem = bookmarks_tree.create_item(bookmarks_root)
-		bm_item.set_text(0, display_text)
+		bm_item.set_text(0, label + "  (" + location_text + ")" if not label.is_empty() else location_text)
+		bm_item.set_tooltip_text(0, bookmark[&"script_path"] + " > " + bookmark[&"name"])
 
 		var item_type: StringName = bookmark.get(&"type", &"func")
 		var item_name: String = bookmark[&"name"]
@@ -747,18 +827,13 @@ func _update_bookmarks_ui():
 				&"class": bm_item.set_icon(0, icon_manager.class_icon)
 				_: bm_item.set_icon(0, icon_manager.func_icon)
 
-		bm_item.set_metadata(0, {
-			&"is_bookmark": true,
-			&"script_path": bookmark[&"script_path"],
-			&"bookmark_name": bookmark[&"name"],
-			&"type": item_type,
-			&"modifier": bookmark.get(&"modifier", &"")
-		})
+		bm_item.set_metadata(0, _get_bookmark_metadata(bookmark))
 
 func _remove_all_bookmarks():
 	settings_manager.clear_all_bookmarks()
 	_update_bookmarks_ui()
 
+# Drops bookmarks for members that no longer exist in the current script (renamed or deleted).
 func _cleanup_stale_bookmarks() -> void:
 	var script: Script = EditorInterface.get_script_editor().get_current_script()
 	if not script or not outline_cache:
@@ -814,6 +889,7 @@ func _on_outline_filter_input(event: InputEvent):
 func _on_outline_filter_changed(text: String):
 	update_outline()
 
+# Lets you drive the outline with the arrow keys while typing in the filter box.
 func navigate_on_tree(event: InputEvent, tree: Tree):
 	if event.is_action_pressed(&"ui_text_submit"):
 		scroll_to_outline_item()
@@ -1022,8 +1098,8 @@ func _scroll_to_bottom():
 	code_edit.grab_focus()
 
 
-# Godot 4.8+ shows members in a DocumentOutline (VBox with filter/sort row + Tree) below the DocumentList.
-# Older versions use an ItemList for members, after the script list ItemList.
+# 4.8 replaced the members ItemList with a DocumentOutline (filter row + a Tree).
+# Before that it was the second ItemList, right after the script list.
 func _find_native_outline() -> Control:
 	var trees: Array[Node] = outline_container.find_children("*", "Tree", true, false)
 	if not trees.is_empty():

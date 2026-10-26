@@ -1,9 +1,8 @@
 @tool
 extends HBoxContainer
 
-## Breadcrumb bar showing the class/function chain under the caret.
-## Each crumb opens a popup of its sibling symbols to jump to.
-## Also reports the top-level member under the caret so the outline can follow it.
+## The class > func path under the caret. Click a crumb to jump to one of its siblings.
+## Also tells the outline which top-level member the caret is in.
 
 signal top_level_symbol_changed(symbol_name: String)
 
@@ -85,6 +84,15 @@ func cleanup():
 func handle_settings_change():
 	_rebuild_crumbs()
 
+## Adds a control (e.g. history buttons) before the crumbs.
+func add_leading_control(control: Control):
+	add_child(control)
+	move_child(control, crumbs.get_index())
+
+## The top-level member under the caret, or an empty dictionary.
+func get_top_level_symbol() -> Dictionary:
+	return symbols[current_chain[0]] if not current_chain.is_empty() else {}
+
 func _on_active_script_changed(_script: Script):
 	var new_code_edit: CodeEdit = null
 	var editor_base: ScriptEditorBase = EditorInterface.get_script_editor().get_current_editor()
@@ -138,8 +146,9 @@ func _refresh(force: bool = false):
 		top_level_symbol_changed.emit(top)
 
 #region Parsing
-# Indentation-based scan: a symbol's scope runs until the next code line at the same or lower indent.
-# Comments, blank lines, multiline strings and lines starting with a closing bracket don't end a scope.
+# Scopes come from indentation: a symbol runs until the next code line at its indent or less.
+# Comments, blank lines, multiline strings and lines starting with ) ] } don't count, so a
+# dict closing on column 0 doesn't end its const early.
 func _parse_symbols():
 	var indent_size: int = code_edit.indent_size
 	var stack: Array[int] = []
@@ -180,6 +189,7 @@ func _parse_symbols():
 			stack.push_back(symbols.size() - 1)
 			pending_annotations = ""
 		elif stripped.begins_with("@"):
+			# Annotation on its own line, e.g. @export above a var. Hang on to it for the next symbol.
 			pending_annotations += " " + stripped
 		else:
 			pending_annotations = ""

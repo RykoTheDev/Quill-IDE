@@ -10,6 +10,7 @@ const OutlineManager = preload("uid://p1uc0k4gy6jr")
 const IconManager = preload("uid://dqgi3yvglh3w4")
 const IndentGuidelinesManager = preload("res://addons/quill-ide/plugs/indent_guidelines.gd")
 const BreadcrumbBar = preload("res://addons/quill-ide/plugs/breadcrumbs.gd")
+const NavigationHistory = preload("res://addons/quill-ide/plugs/history.gd")
 
 const QUICK_OPEN_SCENE: PackedScene = preload("res://addons/quill-ide/plugs/quick_open.tscn")
 
@@ -22,12 +23,22 @@ const OPEN_QUICK_SEARCH_POPUP_RESOURCES: StringName = QUICK_OPEN + &"open_quick_
 const TAB_CYCLE_FORWARD: StringName = QUICK_OPEN + &"tab_cycle_forward"
 const TAB_CYCLE_BACKWARD: StringName = QUICK_OPEN + &"tab_cycle_backward"
 
+const NAVIGATION: StringName = QUILL + &"Navigation/"
+const HISTORY_BACK: StringName = NAVIGATION + &"history_back"
+const HISTORY_FORWARD: StringName = NAVIGATION + &"history_forward"
+const TOGGLE_BOOKMARK: StringName = NAVIGATION + &"toggle_bookmark"
+const NEXT_BOOKMARK: StringName = NAVIGATION + &"next_bookmark"
+const PREVIOUS_BOOKMARK: StringName = NAVIGATION + &"previous_bookmark"
+
 var settings_manager: QuillSettingsManager
 var tab_manager: TabManager
 var outline_manager: OutlineManager
 var icon_manager: IconManager
 var indent_guidelines_manager: IndentGuidelinesManager
 var breadcrumb_bar: BreadcrumbBar
+var navigation_history: NavigationHistory
+var history_back_btn: Button
+var history_forward_btn: Button
 
 var quick_open_popup: QuickOpenPopup
 var quick_open_tween: Tween
@@ -38,6 +49,11 @@ var open_quick_search_popup_gdscripts_shc: Shortcut
 var open_quick_search_popup_resources_shc: Shortcut
 var tab_cycle_forward_shc: Shortcut
 var tab_cycle_backward_shc: Shortcut
+var history_back_shc: Shortcut
+var history_forward_shc: Shortcut
+var toggle_bookmark_shc: Shortcut
+var next_bookmark_shc: Shortcut
+var previous_bookmark_shc: Shortcut
 
 
 func _enter_tree() -> void:
@@ -69,6 +85,12 @@ func _enter_tree() -> void:
 		breadcrumb_bar.free()
 		breadcrumb_bar = null
 
+	navigation_history = NavigationHistory.new()
+	navigation_history.init()
+	scene_changed.connect(_on_scene_changed)
+	if breadcrumb_bar:
+		_add_history_buttons()
+
 	var file_system: EditorFileSystem = EditorInterface.get_resource_filesystem()
 	file_system.filesystem_changed.connect(schedule_update)
 
@@ -87,6 +109,11 @@ func _exit_tree() -> void:
 		indent_guidelines_manager.cleanup()
 		indent_guidelines_manager = null
 
+	if scene_changed.is_connected(_on_scene_changed):
+		scene_changed.disconnect(_on_scene_changed)
+	if navigation_history:
+		navigation_history.cleanup()
+		navigation_history = null
 	if breadcrumb_bar:
 		breadcrumb_bar.cleanup()
 		breadcrumb_bar = null
@@ -105,6 +132,8 @@ func _shortcut_input(event: InputEvent) -> void:
 	if (!event.is_pressed() || event.is_echo()):
 		return
 
+	# Quick open is a double tap (Shift by default): the first press starts a short timer,
+	# and a second press while it's still running opens the popup.
 	if open_quick_search_popup_shc and open_quick_search_popup_shc.matches_event(event):
 		if (quick_open_tween != null && quick_open_tween.is_running()):
 			get_viewport().set_input_as_handled()
@@ -130,17 +159,95 @@ func _shortcut_input(event: InputEvent) -> void:
 		open_quick_search_popup(QuickOpenPopup.Category.RESOURCES)
 
 func _input(event: InputEvent) -> void:
+	# Any other key in between cancels the double tap.
 	if (event is InputEventKey):
 		if open_quick_search_popup_shc and !open_quick_search_popup_shc.matches_event(event):
 			if (quick_open_tween != null):
 				quick_open_tween.kill()
 				quick_open_tween = null
 
+	_handle_navigation_input(event)
+
+# This lives in _input so we see these before Godot's own script history does.
+# It uses the same keys and mouse buttons, and otherwise both would fire.
+func _handle_navigation_input(event: InputEvent) -> void:
+	if (!event.is_pressed() || event.is_echo()):
+		return
+	if (!EditorInterface.get_script_editor().is_visible_in_tree()):
+		return
+
+	var handled: bool = true
+	if (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_XBUTTON1) or (history_back_shc and history_back_shc.matches_event(event)):
+		if navigation_history: navigation_history.go_back()
+	elif (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_XBUTTON2) or (history_forward_shc and history_forward_shc.matches_event(event)):
+		if navigation_history: navigation_history.go_forward()
+	elif toggle_bookmark_shc and toggle_bookmark_shc.matches_event(event):
+		_toggle_bookmark_at_caret()
+	elif next_bookmark_shc and next_bookmark_shc.matches_event(event):
+		if outline_manager: outline_manager.goto_next_bookmark(1)
+	elif previous_bookmark_shc and previous_bookmark_shc.matches_event(event):
+		if outline_manager: outline_manager.goto_next_bookmark(-1)
+	else:
+		handled = false
+
+	if handled:
+		get_viewport().set_input_as_handled()
+
+func _toggle_bookmark_at_caret() -> void:
+	if not outline_manager or not breadcrumb_bar:
+		return
+	var symbol: Dictionary = breadcrumb_bar.get_top_level_symbol()
+	if symbol.is_empty():
+		return
+
+	# Bookmarks find their line again by the outline's type/modifier, so convert to that.
+	var type: StringName = symbol[&"kind"]
+	var modifier: StringName = &""
+	if type == BreadcrumbBar.KIND_VAR and symbol[&"exported"]:
+		modifier = &"@export"
+	elif type == BreadcrumbBar.KIND_ENUM:
+		type = &"const"
+		modifier = &"enum"
+	outline_manager.toggle_bookmark(symbol[&"name"], type, modifier)
+
+func _add_history_buttons() -> void:
+	var editor_theme: Theme = EditorInterface.get_editor_theme()
+
+	history_back_btn = Button.new()
+	history_back_btn.flat = true
+	history_back_btn.focus_mode = Control.FOCUS_NONE
+	history_back_btn.icon = editor_theme.get_icon(&"Back", &"EditorIcons")
+	history_back_btn.tooltip_text = "Go Back"
+	history_back_btn.pressed.connect(navigation_history.go_back)
+	breadcrumb_bar.add_leading_control(history_back_btn)
+
+	history_forward_btn = Button.new()
+	history_forward_btn.flat = true
+	history_forward_btn.focus_mode = Control.FOCUS_NONE
+	history_forward_btn.icon = editor_theme.get_icon(&"Forward", &"EditorIcons")
+	history_forward_btn.tooltip_text = "Go Forward"
+	history_forward_btn.pressed.connect(navigation_history.go_forward)
+	breadcrumb_bar.add_leading_control(history_forward_btn)
+
+	navigation_history.changed.connect(_update_history_buttons)
+	_update_history_buttons()
+
+func _update_history_buttons() -> void:
+	if not navigation_history or not is_instance_valid(history_back_btn):
+		return
+	history_back_btn.disabled = not navigation_history.can_go_back()
+	history_forward_btn.disabled = not navigation_history.can_go_forward()
+
+func _on_scene_changed(scene_root: Node) -> void:
+	if navigation_history and scene_root and not scene_root.scene_file_path.is_empty():
+		navigation_history.record_recent_file(scene_root.scene_file_path)
+
 func _get_window_layout(configuration: ConfigFile) -> void:
 	if outline_manager and outline_manager.outline_width > 0:
 		configuration.set_value("Quill-IDE", "outline_width", outline_manager.outline_width)
 
-# Runs after the script editor restores its own split offset, which assumes the outline is on the left.
+# Godot restores its own split offset around here, and that one assumes the outline is on
+# the left. So put ours back right after it.
 func _set_window_layout(configuration: ConfigFile) -> void:
 	if not outline_manager:
 		return
@@ -173,6 +280,17 @@ func _on_settings_changed() -> void:
 		breadcrumb_bar.handle_settings_change()
 
 	sync_quick_open_settings(changed_settings)
+	sync_navigation_settings(changed_settings)
+
+func sync_navigation_settings(changed_settings: PackedStringArray) -> void:
+	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
+	for setting: String in changed_settings:
+		match (setting):
+			HISTORY_BACK: history_back_shc = editor_settings.get_setting(HISTORY_BACK)
+			HISTORY_FORWARD: history_forward_shc = editor_settings.get_setting(HISTORY_FORWARD)
+			TOGGLE_BOOKMARK: toggle_bookmark_shc = editor_settings.get_setting(TOGGLE_BOOKMARK)
+			NEXT_BOOKMARK: next_bookmark_shc = editor_settings.get_setting(NEXT_BOOKMARK)
+			PREVIOUS_BOOKMARK: previous_bookmark_shc = editor_settings.get_setting(PREVIOUS_BOOKMARK)
 
 func get_current_script() -> Script:
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
@@ -313,6 +431,27 @@ func init_quick_open_shortcuts() -> void:
 	open_quick_search_popup_resources_shc = editor_settings.get_setting(OPEN_QUICK_SEARCH_POPUP_RESOURCES)
 	tab_cycle_forward_shc = editor_settings.get_setting(TAB_CYCLE_FORWARD)
 	tab_cycle_backward_shc = editor_settings.get_setting(TAB_CYCLE_BACKWARD)
+
+	history_back_shc = ensure_shortcut(HISTORY_BACK, KEY_LEFT, true, false)
+	history_forward_shc = ensure_shortcut(HISTORY_FORWARD, KEY_RIGHT, true, false)
+	toggle_bookmark_shc = ensure_shortcut(TOGGLE_BOOKMARK, KEY_B, true, false)
+	next_bookmark_shc = ensure_shortcut(NEXT_BOOKMARK, KEY_N, true, false)
+	previous_bookmark_shc = ensure_shortcut(PREVIOUS_BOOKMARK, KEY_N, true, true)
+
+## Gets the shortcut from editor settings, adding it with this default if it's not there yet.
+func ensure_shortcut(setting: StringName, keycode: Key, alt: bool, shift: bool) -> Shortcut:
+	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
+	if (!editor_settings.has_setting(setting)):
+		var shortcut: Shortcut = Shortcut.new()
+		var event: InputEventKey = InputEventKey.new()
+		event.device = -1
+		event.keycode = keycode
+		event.alt_pressed = alt
+		event.shift_pressed = shift
+
+		shortcut.events = [event]
+		editor_settings.set_setting(setting, shortcut)
+	return editor_settings.get_setting(setting)
 
 func sync_quick_open_settings(changed_settings: PackedStringArray) -> void:
 	for setting: String in changed_settings:

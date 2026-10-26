@@ -80,7 +80,7 @@ func init_outline_order():
 	if editor_settings.has_setting(OUTLINE_ORDER):
 		outline_order = editor_settings.get_setting(OUTLINE_ORDER)
 	else:
-		outline_order = ["Engine Callbacks", "Functions", "Signals", "Exported Properties", "Properties", "Constants", "Classes"]
+		outline_order = ["Classes", "Properties", "Exported Properties", "Constants", "Signals", "Engine Callbacks", "Functions"]
 		editor_settings.set_setting(OUTLINE_ORDER, outline_order)
 
 
@@ -137,6 +137,7 @@ func sync_settings_all():
 	show_engine_funcs = get_setting(SHOW_ENGINE_FUNCS, show_engine_funcs)
 
 
+# Also writes the default the first time, so the setting shows up in Editor Settings.
 func get_setting(property: StringName, alt: bool) -> bool:
 	var editor_settings: EditorSettings = get_editor_settings()
 	if editor_settings.has_setting(property):
@@ -147,6 +148,7 @@ func get_setting(property: StringName, alt: bool) -> bool:
 
 func set_setting(property: StringName, value: bool):
 	var editor_settings: EditorSettings = get_editor_settings()
+	# Our own write would come straight back through settings_changed, so mute that.
 	suppress_settings_sync = true
 	editor_settings.set_setting(property, value)
 	suppress_settings_sync = false
@@ -229,6 +231,32 @@ func is_bookmarked(script_path: String, name: String) -> bool:
 		if bm["script_path"] == script_path and bm["name"] == name:
 			return true
 	return false
+
+func find_bookmark(script_path: String, name: String) -> int:
+	for i: int in bookmarks.size():
+		if bookmarks[i]["script_path"] == script_path and bookmarks[i]["name"] == name:
+			return i
+	return -1
+
+func set_bookmark_label(script_path: String, name: String, label: String) -> void:
+	var idx: int = find_bookmark(script_path, name)
+	if idx == -1:
+		return
+	if label.strip_edges().is_empty():
+		bookmarks[idx].erase(&"label")
+	else:
+		bookmarks[idx][&"label"] = label.strip_edges()
+	_persist_bookmarks()
+
+func move_bookmark(script_path: String, name: String, offset: int) -> void:
+	var idx: int = find_bookmark(script_path, name)
+	var new_idx: int = idx + offset
+	if idx == -1 or new_idx < 0 or new_idx >= bookmarks.size():
+		return
+	var bookmark: Variant = bookmarks[idx]
+	bookmarks.remove_at(idx)
+	bookmarks.insert(new_idx, bookmark)
+	_persist_bookmarks()
 
 func clear_all_bookmarks() -> void:
 	bookmarks.clear()

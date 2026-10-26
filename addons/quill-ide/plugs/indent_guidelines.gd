@@ -64,6 +64,7 @@ var rids_code_edits: Array[RID]
 var bound_draw_callables: Dictionary = {}
 
 func _init() -> void:
+	# Line positions shifted a bit in 4.4, so the defaults depend on the version.
 	guideline_y_offset = -2.0 if Engine.get_version_info().hex >= 0x040400 else -1.0
 	foldmark_y_offset = 0.0 if Engine.get_version_info().hex >= 0x040400 else 2.0
 
@@ -208,6 +209,8 @@ func scaled(p_val: float) -> float:
 	const editor_scale: int = 100
 	return p_val * (float(editor_scale) / 100.0)
 
+# Given a folded line, returns the first line after the fold (regions, multiline
+# strings/comments, or a normal indented block).
 func get_next_unfolded_line(code_edit: CodeEdit, line: int) -> int:
 	var p_lines_to: int = code_edit.get_line_count()
 
@@ -241,6 +244,9 @@ func get_next_unfolded_line(code_edit: CodeEdit, line: int) -> int:
 					break
 	return line + 1
 
+# Builds one guide per open indent level for the given line range. tmp_lines holds the
+# guides still "open"; when the indent drops, the deeper ones are closed off into output.
+# Line numbers in the output are visual (folded lines collapsed), not source lines.
 func build_lines(code_edit: CodeEdit, p_lines_from: int, p_lines_to: int, output: Array[LineInCodeEditor], foldedlines: PackedInt32Array) -> void:
 	var indent_size: int = code_edit.indent_size
 	var skiped_lines: int = 0
@@ -255,6 +261,7 @@ func build_lines(code_edit: CodeEdit, p_lines_from: int, p_lines_to: int, output
 		var current_indent_level: int = current_line_indent / indent_size
 
 		var current_line_folded: bool = code_edit.is_line_folded(line)
+		# Blank lines, and comments at or left of the open block, shouldn't cut a guide short.
 		if not current_line_folded:
 			if code_edit.get_line(line).strip_edges().length() == 0 \
 				or (current_indent_level <= len(tmp_lines) and code_edit.is_in_comment(line) != -1 and code_edit.is_in_comment(line) == code_edit.get_first_non_whitespace_column(line)):
@@ -312,6 +319,7 @@ func _editor_script_changed(_s: Script) -> void:
 		code_edit.clip_contents = true
 
 
+	# Forget editors that have been closed since.
 	for i: int in range(len(ids_code_edits) - 1, -1, -1):
 		var id: int = ids_code_edits[i]
 		if instance_from_id(id) == null:
@@ -319,6 +327,8 @@ func _editor_script_changed(_s: Script) -> void:
 			rids_code_edits.remove_at(i)
 			bound_draw_callables.erase(id)
 
+	# Guides go on our own canvas item parented to the CodeEdit, so we never have to
+	# touch its drawing. One per editor, freed in cleanup().
 	var draw_rid: RID = RenderingServer.canvas_item_create()
 	RenderingServer.canvas_item_set_parent(draw_rid, code_edit.get_canvas_item())
 
@@ -335,6 +345,7 @@ func _editor_script_changed(_s: Script) -> void:
 	code_edit.draw.connect(bound_fn)
 	code_edit.queue_redraw()
 
+# The current CodeEdit, or null if there isn't one or we've already hooked it.
 func _try_get_code_edit() -> CodeEdit:
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
 	if not script_editor:
@@ -370,6 +381,7 @@ func _draw_appendix(code_edit: CodeEdit, draw_rid: RID) -> void:
 	var caret_idx: int = code_edit.get_caret_line()
 	var caret_indent: int = code_edit.get_indent_level(caret_idx)
 
+	# Build a bit past the bottom of the view so guides don't pop in while scrolling.
 	var visible_lines_from: int = maxi(code_edit.get_first_visible_line(), 0)
 	var visible_lines_to: int = mini(code_edit.get_last_full_visible_line() + int(code_edit.scroll_smooth) + 10, lines_count)
 
@@ -393,6 +405,8 @@ func _draw_guidelines(code_edit: CodeEdit, draw_rid: RID, output: Array[LineInCo
 		guideline_offset: float, h_scroll: float, row_height: int, vscroll_delta: float,
 		font: Font, font_size: int) -> void:
 
+	# If the caret is scrolled off screen, its block's guide would start or end at the view
+	# edge and stop looking active. Build that block on its own and stretch the matching guide.
 	if guideline_keep_caret:
 		var caret_lines: Array[LineInCodeEditor]
 		var _caret_foldedlines: PackedInt32Array
@@ -444,6 +458,7 @@ func _draw_guidelines(code_edit: CodeEdit, draw_rid: RID, output: Array[LineInCo
 				color = guideline_active_color
 
 		var line_no: int = line_data.lineno_to
+		# When several blocks close on the same line, stagger the ends so the hooks don't overlap.
 		var offset_y: float = scaled(minf(block_ends.count(line_no) * 2.0, font.get_height(font_size) / 2.0) + 2.0)
 		var point_start: Vector2 = Vector2(_x, row_height * (line_data.start_x - vscroll_delta) + guideline_y_offset)
 		var point_end: Vector2 = point_start + Vector2(0.0, row_height * line_data.height - offset_y + guideline_y_offset)
@@ -499,6 +514,7 @@ func _get_rainbow_color(code_edit: CodeEdit, line_data: LineInCodeEditor, caret_
 		_:
 			base_color = guideline_color
 
+	# Caret sitting on a block header (func, if, ...) also lights up the guide below it.
 	if not is_active and caret_indent == line_data.indent:
 		var caret_text: String = code_edit.get_line(caret_idx).strip_edges()
 		var caret_keyword: String

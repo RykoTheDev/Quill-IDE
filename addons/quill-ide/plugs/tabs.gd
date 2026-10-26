@@ -34,6 +34,8 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	var split_container = find_or_null(script_editor.find_children("*", "HSplitContainer", true, false))
 	left_side_panel = split_container.get_child(0)
 
+	# First ItemList in the script editor is the open-scripts list. We mostly hide it,
+	# but it's still what Godot uses to switch/close scripts, so we drive it from the tabs.
 	scripts_item_list = find_or_null(script_editor.find_children("*", "ItemList", true, false))
 	scripts_item_list.allow_reselect = true
 
@@ -189,6 +191,8 @@ func cycle_tab_backward():
 		new_tab = scripts_tab_container.get_tab_count() - 1
 	scripts_tab_container.current_tab = new_tab
 
+# Clears the script list filter. A filtered list hides items, which breaks
+# anything that clicks the list by tab index.
 func update_script_text_filter():
 	if script_filter_txt.text != &"":
 		script_filter_txt.text = &""
@@ -206,8 +210,8 @@ func update_tabs():
 	for index: int in scripts_tab_container.get_tab_count():
 		update_tab(index, tab_scripts.get(index))
 
-# Maps tab index -> edited script. Both editor lists follow tab order, but get_open_scripts()
-# skips text files, so their editors are skipped here too to keep the two lists aligned.
+# tab index -> script. Both lists come back in tab order, but get_open_scripts() leaves out
+# text files, so skip their editors too or everything after them ends up off by one.
 func get_tab_scripts() -> Dictionary[int, Script]:
 	var result: Dictionary[int, Script] = {}
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
@@ -233,7 +237,7 @@ func update_tab(index: int, script_override: Script = null):
 	if tab_control == null:
 		return
 
-	# Note: tab_control.get("script") is the editor node's own script (always null), not the edited one.
+	# Don't use tab_control.get("script") - that's the editor node's own script, always null.
 	var script: Script = script_override if script_override else get_tab_scripts().get(index)
 	if script:
 		var name: String = script.resource_path.get_file()
@@ -272,6 +276,7 @@ func update_tabs_position():
 		return
 	scripts_tab_container.tabs_position = TabContainer.POSITION_TOP
 
+# Keeps the script list selection on the active tab, since Godot acts on whatever's selected there.
 func sync_tab_with_script_list():
 	if not scripts_item_list or not scripts_tab_bar:
 		return
@@ -294,6 +299,8 @@ func get_res_path(idx: int) -> String:
 
 	return path_var
 
+# Godot already handles closing (middle click) and the context menu (right click) on the
+# script list, so rather than redo all that we fake the click there.
 func simulate_item_clicked(tab_idx: int, mouse_idx: int):
 	scripts_item_list.item_clicked.emit(tab_idx, scripts_item_list.get_local_mouse_position(), mouse_idx)
 
@@ -380,6 +387,7 @@ func _close_all_except(exclude_index: int):
 	_closing_tabs = true
 	update_script_text_filter()
 
+	# Back to front, so closing one doesn't shift the indices we haven't got to yet.
 	for i in range(tab_count - 1, -1, -1):
 		if i != exclude_index:
 			simulate_item_clicked(i, MOUSE_BUTTON_MIDDLE)
@@ -399,6 +407,7 @@ func _on_tab_bar_mouse_exited():
 	last_tab_hovered = -1
 
 func _on_active_tab_rearranged(idx_to: int):
+	# Looks like a no-op, but re-setting it makes the container refresh after a drag.
 	scripts_tab_container.current_tab = scripts_tab_container.current_tab
 	selected_tab = scripts_tab_container.current_tab
 
@@ -406,6 +415,7 @@ func _on_tab_bar_gui_input(event: InputEvent):
 	if last_tab_hovered == -1:
 		return
 
+	# Middle click closes a tab, like in a browser.
 	if event is InputEventMouseButton:
 		if event.is_pressed() and event.button_index == MOUSE_BUTTON_MIDDLE:
 			update_script_text_filter()

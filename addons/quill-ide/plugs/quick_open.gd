@@ -118,6 +118,8 @@ func set_category(category: Category):
 
 func open_file(index: int):
 	var file: String = files_list.get_item_metadata(index)
+	if (plugin != null && plugin.navigation_history != null):
+		plugin.navigation_history.record_recent_file(file)
 
 	if (ResourceLoader.exists(file)):
 		var res: Resource = load(file)
@@ -174,7 +176,18 @@ func focus_and_select_first():
 	filter_txt.grab_focus()
 
 	if (files_list.item_count > 0):
-		files_list.select(0)
+		# The top recent file is usually the one you're already in, so start on the next one.
+		var index: int = 0
+		if (filter_txt.text.is_empty() && files_list.item_count > 1 && files_list.get_item_metadata(0) == get_current_file()):
+			index = 1
+		files_list.select(index)
+
+func get_current_file() -> String:
+	var script: Script = EditorInterface.get_script_editor().get_current_script()
+	if (script == null or not EditorInterface.get_script_editor().is_visible_in_tree()):
+		var scene_root: Node = EditorInterface.get_edited_scene_root()
+		return scene_root.scene_file_path if scene_root != null else ""
+	return script.resource_path
 
 func build_file_cache():
 	var dir: EditorFileSystemDirectory = EditorInterface.get_resource_filesystem().get_filesystem()
@@ -202,6 +215,7 @@ func build_file_cache_dir(dir: EditorFileSystemDirectory):
 		var last_delimiter: int = file.rfind(&"/")
 
 		var file_name: String = file.substr(last_delimiter + 1)
+		# Show the folder after the name, e.g. "player.gd - (scripts/actors)". 6 is len("res://").
 		var file_structure: String = &""
 		if (file_name.length() + 6 != file.length()):
 			file_structure = SEPARATOR + STRUCTURE_START + file.substr(6, last_delimiter - 6) + STRUCTURE_END
@@ -247,14 +261,35 @@ func fill_files_list_with(files: Array[FileData], comparator: Callable):
 	if (!filter_text.is_empty()):
 		files.sort_custom(comparator)
 
+	# Empty search: recent files go on top.
+	var recent: Dictionary[String, bool] = {}
+	if (filter_text.is_empty() && plugin != null && plugin.navigation_history != null):
+		var by_path: Dictionary[String, FileData] = {}
+		for file_data: FileData in files:
+			by_path[file_data.file] = file_data
+
+		var recent_color: Color = EditorInterface.get_editor_settings().get_setting("interface/theme/accent_color")
+		recent_color.a = 0.08
+		for path: String in plugin.navigation_history.recent_files:
+			if (by_path.has(path)):
+				recent[path] = true
+				add_file_item(by_path[path])
+				files_list.set_item_custom_bg_color(files_list.item_count - 1, recent_color)
+				files_list.set_item_tooltip(files_list.item_count - 1, path + "\n(Recently opened)")
+
 	for file_data: FileData in files:
 		var file: String = file_data.file
+		if (recent.has(file)):
+			continue
 		if (filter_text.is_empty() || filter_text.is_subsequence_ofn(file)):
-			var icon: Texture2D = EditorInterface.get_base_control().get_theme_icon(file_data.file_type, &"EditorIcons")
+			add_file_item(file_data)
 
-			files_list.add_item(file_data.file_name_structure, icon)
-			files_list.set_item_metadata(files_list.item_count - 1, file)
-			files_list.set_item_tooltip(files_list.item_count - 1, file)
+func add_file_item(file_data: FileData):
+	var icon: Texture2D = EditorInterface.get_base_control().get_theme_icon(file_data.file_type, &"EditorIcons")
+
+	files_list.add_item(file_data.file_name_structure, icon)
+	files_list.set_item_metadata(files_list.item_count - 1, file_data.file)
+	files_list.set_item_tooltip(files_list.item_count - 1, file_data.file)
 
 func sort_by_order_filter(file_data1: FileData, file_data2: FileData) -> bool:
 	var order1: int = ORDER.get(file_data1.file_type, ORDER.size())
@@ -265,6 +300,7 @@ func sort_by_order_filter(file_data1: FileData, file_data2: FileData) -> bool:
 
 	return sort_by_filter(file_data1, file_data2)
 
+# Files whose names start with the typed text float up; ties fall back to alphabetical.
 func sort_by_filter(file_data1: FileData, file_data2: FileData) -> bool:
 	var filter_text: String = filter_txt.text
 
