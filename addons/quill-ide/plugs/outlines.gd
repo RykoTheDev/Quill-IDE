@@ -32,6 +32,10 @@ var outline_root: TreeItem
 
 var category_items: Dictionary[StringName, TreeItem] = {}
 
+# Top-level member under the caret, highlighted when following the cursor.
+var followed_symbol: String = ""
+var highlighted_item: TreeItem
+
 var collapse_button_container: HBoxContainer
 var context_menu: PopupMenu
 
@@ -322,6 +326,7 @@ func update_outline():
 	if not icon_manager or not settings_manager:
 		return
 
+	highlighted_item = null
 	outline_tree.clear()
 	outline_root = outline_tree.create_item()
 	category_items.clear()
@@ -380,6 +385,36 @@ func update_outline():
 				&"modifier": category_data.get(&"modifier", &"")
 			}
 			item_node.set_metadata(0, metadata)
+
+	_apply_followed_symbol(false)
+
+func follow_symbol(symbol_name: String):
+	followed_symbol = symbol_name
+	_apply_followed_symbol(true)
+
+# Highlights with a background colour rather than selecting, since selecting navigates to the item.
+func _apply_followed_symbol(scroll: bool):
+	if not outline_tree:
+		return
+	if is_instance_valid(highlighted_item):
+		highlighted_item.clear_custom_bg_color(0)
+	highlighted_item = null
+
+	if followed_symbol.is_empty() or not settings_manager or not settings_manager.is_outline_follow_cursor:
+		return
+
+	for category_item: TreeItem in category_items.values():
+		for item: TreeItem in category_item.get_children():
+			if item.get_text(0) != followed_symbol:
+				continue
+			# Inside a collapsed category, mark the category so the location is still visible.
+			highlighted_item = category_item if category_item.collapsed else item
+			var color: Color = icon_manager.get_editor_accent_color()
+			color.a = 0.25
+			highlighted_item.set_custom_bg_color(0, color)
+			if scroll:
+				outline_tree.scroll_to_item(highlighted_item)
+			return
 
 
 func get_category_order(category_name: StringName) -> int:
@@ -457,6 +492,7 @@ func _on_outline_item_collapsed(item: TreeItem):
 		if category_items[category_name] == item:
 			settings_manager.set_category_collapsed(category_name, item.collapsed)
 			break
+	_apply_followed_symbol(false)
 
 func _on_outline_tree_gui_input(event: InputEvent):
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:

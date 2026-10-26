@@ -9,6 +9,7 @@ const TabManager = preload("uid://rcrd4dy7nevv")
 const OutlineManager = preload("uid://p1uc0k4gy6jr")
 const IconManager = preload("uid://dqgi3yvglh3w4")
 const IndentGuidelinesManager = preload("res://addons/quill-ide/plugs/indent_guidelines.gd")
+const BreadcrumbBar = preload("res://addons/quill-ide/plugs/breadcrumbs.gd")
 
 const QUICK_OPEN_SCENE: PackedScene = preload("res://addons/quill-ide/plugs/quick_open.tscn")
 
@@ -26,7 +27,7 @@ var tab_manager: TabManager
 var outline_manager: OutlineManager
 var icon_manager: IconManager
 var indent_guidelines_manager: IndentGuidelinesManager
-
+var breadcrumb_bar: BreadcrumbBar
 
 var quick_open_popup: QuickOpenPopup
 var quick_open_tween: Tween
@@ -60,6 +61,14 @@ func _enter_tree() -> void:
 
 	tab_manager.script_tab_changed.connect(outline_manager._on_active_script_changed)
 
+	breadcrumb_bar = BreadcrumbBar.new()
+	if breadcrumb_bar.init(settings_manager, icon_manager):
+		breadcrumb_bar.top_level_symbol_changed.connect(outline_manager.follow_symbol)
+		tab_manager.script_tab_changed.connect(breadcrumb_bar._on_active_script_changed)
+	else:
+		breadcrumb_bar.free()
+		breadcrumb_bar = null
+
 	var file_system: EditorFileSystem = EditorInterface.get_resource_filesystem()
 	file_system.filesystem_changed.connect(schedule_update)
 
@@ -78,6 +87,9 @@ func _exit_tree() -> void:
 		indent_guidelines_manager.cleanup()
 		indent_guidelines_manager = null
 
+	if breadcrumb_bar:
+		breadcrumb_bar.cleanup()
+		breadcrumb_bar = null
 	if outline_manager:
 		outline_manager.cleanup()
 	if tab_manager:
@@ -157,6 +169,8 @@ func _on_settings_changed() -> void:
 		indent_guidelines_manager.handle_settings_change(changed_settings)
 	if tab_manager and settings_manager:
 		tab_manager.handle_settings_change(changed_settings, settings_manager)
+	if breadcrumb_bar:
+		breadcrumb_bar.handle_settings_change()
 
 	sync_quick_open_settings(changed_settings)
 

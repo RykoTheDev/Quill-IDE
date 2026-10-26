@@ -10,6 +10,7 @@ const AUTO_CLOSE_SCRIPTS: StringName = GENERAL + &"auto_close_scripts"
 const MINIMALISM: StringName = GENERAL + &"minimalism"
 const SCRIPT_LIST_VISIBLE: StringName = GENERAL + &"script_list_visible"
 const SCRIPT_TABS_VISIBLE: StringName = GENERAL + &"script_tabs_visible"
+const SHOW_BREADCRUMBS: StringName = GENERAL + &"show_breadcrumbs"
 
 const OUTLINE: StringName = GODOT_IDE + &"Outline/"
 const OUTLINE_ORDER: StringName = OUTLINE + &"outline_order"
@@ -24,6 +25,7 @@ const SHOW_ENGINE_FUNCS: StringName = OUTLINE + &"show_engine_funcs"
 const OUTLINE_COLLAPSED: StringName = OUTLINE + &"outline_collapsed"
 const OUTLINE_BOOKMARKS: StringName = OUTLINE + &"outline_bookmarks"
 const HIDE_OUTLINE_PANEL: StringName = OUTLINE + &"hide_outline_panel"
+const OUTLINE_FOLLOW_CURSOR: StringName = OUTLINE + &"follow_cursor"
 
 var is_outline_right: bool = true
 var is_script_list_visible: bool = false
@@ -34,6 +36,8 @@ var is_minimalism: bool = false
 var is_script_tabs_visible: bool = true
 var is_outline_hidden: bool = false
 var is_script_tabs_top: bool = true
+var show_breadcrumbs: bool = true
+var is_outline_follow_cursor: bool = true
 var outline_order: PackedStringArray
 
 var suppress_settings_sync: bool = false
@@ -57,6 +61,8 @@ func init_settings():
 	is_minimalism = get_setting(MINIMALISM, is_minimalism)
 	is_script_tabs_visible = get_setting(SCRIPT_TABS_VISIBLE, is_script_tabs_visible)
 	is_outline_hidden = get_setting(HIDE_OUTLINE_PANEL, is_outline_hidden)
+	show_breadcrumbs = get_setting(SHOW_BREADCRUMBS, show_breadcrumbs)
+	is_outline_follow_cursor = get_setting(OUTLINE_FOLLOW_CURSOR, is_outline_follow_cursor)
 	init_outline_order()
 	collapsed_categories = load_collapsed_categories()
 	bookmarks = load_bookmarks()
@@ -95,6 +101,8 @@ func sync_settings(changed_settings: PackedStringArray):
 			AUTO_CLOSE_SCRIPTS: is_auto_close_scripts = get_setting(setting, is_auto_close_scripts)
 			MINIMALISM: is_minimalism = get_setting(setting, is_minimalism)
 			HIDE_OUTLINE_PANEL: is_outline_hidden = get_setting(setting, is_outline_hidden)
+			SHOW_BREADCRUMBS: show_breadcrumbs = get_setting(setting, show_breadcrumbs)
+			OUTLINE_FOLLOW_CURSOR: is_outline_follow_cursor = get_setting(setting, is_outline_follow_cursor)
 			SHOW_FUNCS: show_funcs = get_setting(setting, show_funcs)
 			SHOW_SIGNALS: show_signals = get_setting(setting, show_signals)
 			SHOW_CONSTANTS: show_constants = get_setting(setting, show_constants)
@@ -114,6 +122,8 @@ func sync_settings_all():
 	is_minimalism = get_setting(MINIMALISM, is_minimalism)
 	is_script_tabs_visible = get_setting(SCRIPT_TABS_VISIBLE, is_script_tabs_visible)
 	is_outline_hidden = get_setting(HIDE_OUTLINE_PANEL, is_outline_hidden)
+	show_breadcrumbs = get_setting(SHOW_BREADCRUMBS, show_breadcrumbs)
+	is_outline_follow_cursor = get_setting(OUTLINE_FOLLOW_CURSOR, is_outline_follow_cursor)
 	init_outline_order()
 	collapsed_categories = load_collapsed_categories()
 	bookmarks = load_bookmarks()
