@@ -15,6 +15,8 @@ const ProjectFiles = preload("res://addons/quill-ide/plugs/project_files.gd")
 const SymbolParser = preload("res://addons/quill-ide/plugs/symbol_parser.gd")
 const UsagesPopup = preload("res://addons/quill-ide/plugs/usages_popup.gd")
 const SmoothCaretManager = preload("res://addons/quill-ide/plugs/smooth_caret_manager.gd")
+const TabExtras = preload("res://addons/quill-ide/plugs/tab_extras.gd")
+const SplitView = preload("res://addons/quill-ide/plugs/split_view.gd")
 
 const QUICK_OPEN_SCENE: PackedScene = preload("res://addons/quill-ide/plugs/quick_open.tscn")
 #TODO dsada
@@ -34,6 +36,8 @@ const TOGGLE_BOOKMARK: StringName = NAVIGATION + &"toggle_bookmark"
 const NEXT_BOOKMARK: StringName = NAVIGATION + &"next_bookmark"
 const PREVIOUS_BOOKMARK: StringName = NAVIGATION + &"previous_bookmark"
 const FIND_USAGES: StringName = NAVIGATION + &"find_usages"
+const TOGGLE_PIN: StringName = NAVIGATION + &"toggle_pin_tab"
+const TOGGLE_SPLIT: StringName = NAVIGATION + &"toggle_split_view"
 
 var settings_manager: QuillSettingsManager
 var tab_manager: TabManager
@@ -46,6 +50,8 @@ var history_back_btn: Button
 var history_forward_btn: Button
 var usages_popup: UsagesPopup
 var smooth_caret_manager: SmoothCaretManager
+var tab_extras: TabExtras
+var split_view: SplitView
 
 var quick_open_popup: QuickOpenPopup
 var quick_open_tween: Tween
@@ -62,6 +68,8 @@ var toggle_bookmark_shc: Shortcut
 var next_bookmark_shc: Shortcut
 var previous_bookmark_shc: Shortcut
 var find_usages_shc: Shortcut
+var toggle_pin_shc: Shortcut
+var toggle_split_shc: Shortcut
 
 
 func _enter_tree() -> void:
@@ -90,6 +98,21 @@ func _enter_tree() -> void:
 		tab_manager.cleanup()
 		tab_manager = null
 		failed_features.append("Script tabs")
+
+	# Before the breadcrumbs: this unwraps the tabs if a dead instance left them inside its split,
+	# and the breadcrumbs need the tabs back in their normal parent.
+	var tab_containers: Array[Node] = EditorInterface.get_script_editor().find_children("*", "TabContainer", true, false)
+	if not tab_containers.is_empty():
+		split_view = SplitView.new()
+		split_view.init(tab_containers[0])
+	else:
+		failed_features.append("Split view")
+
+	if tab_manager:
+		tab_extras = TabExtras.new()
+		tab_extras.init(tab_manager, settings_manager)
+		if split_view:
+			tab_extras.split_requested.connect(split_view.open)
 
 	outline_manager = OutlineManager.new()
 	if not outline_manager.init(settings_manager, icon_manager):
@@ -160,6 +183,13 @@ func _exit_tree() -> void:
 		scene_changed.disconnect(_on_scene_changed)
 	if resource_saved.is_connected(_on_resource_saved):
 		resource_saved.disconnect(_on_resource_saved)
+	# Saves unsaved pane edits and puts the tabs back in their own parent.
+	if split_view:
+		split_view.cleanup()
+		split_view = null
+	if tab_extras:
+		tab_extras.cleanup()
+		tab_extras = null
 	if navigation_history:
 		navigation_history.cleanup()
 		navigation_history = null
@@ -244,6 +274,10 @@ func _handle_navigation_input(event: InputEvent) -> void:
 		if outline_manager: outline_manager.goto_next_bookmark(-1)
 	elif find_usages_shc and find_usages_shc.matches_event(event):
 		_find_usages_at_caret()
+	elif toggle_pin_shc and toggle_pin_shc.matches_event(event):
+		if tab_extras: tab_extras.toggle_pin_current()
+	elif toggle_split_shc and toggle_split_shc.matches_event(event):
+		if split_view: split_view.toggle()
 	else:
 		handled = false
 
@@ -350,6 +384,12 @@ func schedule_update() -> void:
 	set_process(true)
 
 func update_editor() -> void:
+	# A branch checkout shows up as a filesystem change.
+	if tab_extras:
+		tab_extras.check_branch()
+	# Picks up the split pane's file being changed by something else.
+	if split_view:
+		split_view.on_filesystem_changed()
 	if tab_manager:
 		tab_manager.update_editor()
 	if outline_manager:
@@ -370,6 +410,8 @@ func _on_settings_changed() -> void:
 		tab_manager.handle_settings_change(changed_settings, settings_manager)
 	if breadcrumb_bar:
 		breadcrumb_bar.handle_settings_change()
+	if split_view:
+		split_view.handle_settings_change()
 
 	sync_quick_open_settings(changed_settings)
 	sync_navigation_settings(changed_settings)
@@ -384,6 +426,8 @@ func sync_navigation_settings(changed_settings: PackedStringArray) -> void:
 			NEXT_BOOKMARK: next_bookmark_shc = editor_settings.get_setting(NEXT_BOOKMARK)
 			PREVIOUS_BOOKMARK: previous_bookmark_shc = editor_settings.get_setting(PREVIOUS_BOOKMARK)
 			FIND_USAGES: find_usages_shc = editor_settings.get_setting(FIND_USAGES)
+			TOGGLE_PIN: toggle_pin_shc = editor_settings.get_setting(TOGGLE_PIN)
+			TOGGLE_SPLIT: toggle_split_shc = editor_settings.get_setting(TOGGLE_SPLIT)
 
 func get_current_script() -> Script:
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
@@ -530,9 +574,23 @@ func init_quick_open_shortcuts() -> void:
 	next_bookmark_shc = ensure_shortcut(NEXT_BOOKMARK, KEY_N, true, false)
 	previous_bookmark_shc = ensure_shortcut(PREVIOUS_BOOKMARK, KEY_N, true, true)
 	find_usages_shc = ensure_shortcut(FIND_USAGES, KEY_F12, false, true)
+	toggle_pin_shc = ensure_shortcut(TOGGLE_PIN, KEY_P, true, false)
+	# Not VS Code's Ctrl+\: Godot already uses that for "Toggle Scripts Panel", and on many
+	# keyboard layouts backslash needs AltGr anyway. A briefly shipped Ctrl+\ default is replaced.
+	_replace_old_default(TOGGLE_SPLIT, KEY_BACKSLASH)
+	toggle_split_shc = ensure_shortcut(TOGGLE_SPLIT, KEY_S, true, false)
+
+# Drops a stored shortcut that still has an old default key, so ensure_shortcut writes the new one.
+func _replace_old_default(setting: StringName, old_keycode: Key) -> void:
+	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
+	if not editor_settings.has_setting(setting):
+		return
+	var shortcut: Shortcut = editor_settings.get_setting(setting)
+	if shortcut and shortcut.events.size() == 1 and shortcut.events[0] is InputEventKey and shortcut.events[0].keycode == old_keycode:
+		editor_settings.erase(setting)
 
 ## Gets the shortcut from editor settings, adding it with this default if it's not there yet.
-func ensure_shortcut(setting: StringName, keycode: Key, alt: bool, shift: bool) -> Shortcut:
+func ensure_shortcut(setting: StringName, keycode: Key, alt: bool, shift: bool, ctrl: bool = false) -> Shortcut:
 	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
 	if (!editor_settings.has_setting(setting)):
 		var shortcut: Shortcut = Shortcut.new()
@@ -541,6 +599,7 @@ func ensure_shortcut(setting: StringName, keycode: Key, alt: bool, shift: bool) 
 		event.keycode = keycode
 		event.alt_pressed = alt
 		event.shift_pressed = shift
+		event.command_or_control_autoremap = ctrl
 
 		shortcut.events = [event]
 		editor_settings.set_setting(setting, shortcut)

@@ -25,6 +25,12 @@ var _closing_tabs: bool = false
 const TAB_THEME: Theme = preload("uid://dr3t6l2rux68p")
 
 signal script_tab_changed(script: Script)
+## After every tab refresh, with the tab index -> script map (pins and groups re-apply on this).
+signal tabs_updated(tab_scripts: Dictionary)
+
+## Set by the tab extras: returns true for a script path that's pinned. Pinned tabs are skipped by
+## auto-close, "close others", middle click and the tab's close button.
+var is_pinned: Callable = func(_path: String) -> bool: return false
 
 ## Returns false (and changes nothing) if the editor nodes we need aren't there.
 func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager) -> bool:
@@ -86,6 +92,13 @@ func cleanup():
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
 	if script_editor.editor_script_changed.is_connected(_on_active_script_changed):
 		script_editor.editor_script_changed.disconnect(_on_active_script_changed)
+
+	if is_instance_valid(proxy_menu):
+		if proxy_menu.get_parent():
+			proxy_menu.get_parent().remove_child(proxy_menu)
+		proxy_menu.queue_free()
+	proxy_menu = null
+	godot_menu = null
 
 	if is_instance_valid(old_script_editor_base):
 		if old_script_editor_base.edited_script_changed.is_connected(_on_script_changed):
@@ -240,6 +253,14 @@ func update_tabs():
 	var tab_scripts: Dictionary[int, Script] = get_tab_scripts()
 	for index: int in scripts_tab_container.get_tab_count():
 		update_tab(index, tab_scripts.get(index))
+	tabs_updated.emit(tab_scripts)
+
+## Whether the tab at this index holds a pinned script.
+func is_tab_pinned(index: int, tab_scripts: Dictionary = {}) -> bool:
+	if tab_scripts.is_empty():
+		tab_scripts = get_tab_scripts()
+	var script: Script = tab_scripts.get(index)
+	return script != null and is_pinned.call(script.resource_path)
 
 # tab index -> script. Both lists come back in tab order, but get_open_scripts() leaves out
 # text files, so skip their editors too or everything after them ends up off by one.
@@ -333,7 +354,22 @@ func get_res_path(idx: int) -> String:
 # Godot already handles closing (middle click) and the context menu (right click) on the
 # script list, so rather than redo all that we fake the click there.
 func simulate_item_clicked(tab_idx: int, mouse_idx: int):
-	scripts_item_list.item_clicked.emit(tab_idx, scripts_item_list.get_local_mouse_position(), mouse_idx)
+	scripts_item_list.item_clicked.emit(_list_index_for_tab(tab_idx), scripts_item_list.get_local_mouse_position(), mouse_idx)
+
+# The script list can be in a different order from the tabs (it sorts by name by default, and tabs
+# can be dragged around), but Godot stores each row's tab index as its metadata. If a Godot version
+# doesn't, fall back to assuming the same order.
+func _list_index_for_tab(tab_idx: int) -> int:
+	for i: int in scripts_item_list.item_count:
+		var metadata: Variant = scripts_item_list.get_item_metadata(i)
+		if typeof(metadata) == TYPE_INT and metadata == tab_idx:
+			return i
+	return tab_idx
+
+# Godot marks unsaved scripts with "(*)" in the script list.
+func _is_tab_unsaved(tab_idx: int) -> bool:
+	var row: int = _list_index_for_tab(tab_idx)
+	return row < scripts_item_list.item_count and scripts_item_list.get_item_text(row).ends_with("(*)")
 
 func _on_script_filter_input(event: InputEvent):
 	navigate_on_list(event, scripts_item_list, _select_script)
@@ -392,6 +428,9 @@ func _on_script_changed():
 	update_tab(selected_tab)
 
 func _on_tab_close(tab_idx: int):
+	# Pinned: unpin first (the pin button on the tab, or the Tabs menu).
+	if is_tab_pinned(tab_idx):
+		return
 	update_script_text_filter()
 
 	# Disconnect tab_changed temporarily to prevent a double _on_tab_changed call.
@@ -410,6 +449,24 @@ func _on_tab_close(tab_idx: int):
 	_on_tab_changed(selected_tab)
 	call_deferred("update_tabs")
 
+## Closes every tab whose script path isn't in keep_paths. Pinned and unsaved tabs always stay.
+## Used by session loading.
+##
+## Unsaved ones are skipped rather than closed: closing one makes Godot ask "save changes?" and
+## wait, and that answer is applied to whichever tab is current when you click, which by then
+## wouldn't be the one it asked about.
+func close_tabs_except_paths(keep_paths: PackedStringArray):
+	if not scripts_tab_container:
+		return
+	update_script_text_filter()
+	var tab_scripts: Dictionary[int, Script] = get_tab_scripts()
+	_closing_tabs = true
+	for i in range(scripts_tab_container.get_tab_count() - 1, -1, -1):
+		var script: Script = tab_scripts.get(i)
+		if script and not keep_paths.has(script.resource_path) and not is_tab_pinned(i, tab_scripts) and not _is_tab_unsaved(i):
+			simulate_item_clicked(i, MOUSE_BUTTON_MIDDLE)
+	_closing_tabs = false
+
 func _close_all_except(exclude_index: int):
 	var tab_count: int = scripts_tab_container.get_tab_count()
 	if tab_count <= 1:
@@ -417,10 +474,12 @@ func _close_all_except(exclude_index: int):
 
 	_closing_tabs = true
 	update_script_text_filter()
+	var tab_scripts: Dictionary[int, Script] = get_tab_scripts()
 
 	# Back to front, so closing one doesn't shift the indices we haven't got to yet.
+	# Unsaved tabs stay open for the same reason as in close_tabs_except_paths.
 	for i in range(tab_count - 1, -1, -1):
-		if i != exclude_index:
+		if i != exclude_index and not is_tab_pinned(i, tab_scripts) and not _is_tab_unsaved(i):
 			simulate_item_clicked(i, MOUSE_BUTTON_MIDDLE)
 			if i < exclude_index:
 				exclude_index -= 1
@@ -430,6 +489,150 @@ func _close_all_except(exclude_index: int):
 func _on_tab_rmb(tab_idx: int):
 	update_script_text_filter()
 	simulate_item_clicked(tab_idx, MOUSE_BUTTON_RIGHT)
+	_adapt_context_menu(tab_idx)
+
+#region Tab context menu
+# Godot's menu is written for its vertical script list ("Close Tabs Below", "Move Document Up").
+# For a horizontal tab bar we show our own copy of it instead, reworded for where the clicked tab
+# sits: close-left and/or close-right, and move left/right without the one that can't happen.
+#
+# Why a copy rather than editing Godot's menu in place: Godot's handler sees every id clicked in
+# its menu, and ids it doesn't know get read as one of its own commands (it opened a file dialog).
+# In the copy, Godot's items are passed back to Godot's menu as if clicked there, and ours never
+# reach it.
+#
+# Only English labels are recognised; with the editor in another language the copy is unchanged.
+
+# Positive on purpose: PopupMenu reports an item with a negative id by its position instead, and
+# position 2 handed to Godot is its "Open File" command. Large enough not to clash with Godot's ids.
+const CLOSE_TABS_LEFT_ID: int = 900001
+const CLOSE_TABS_RIGHT_ID: int = 900002
+const PROXY_MENU_NAME: StringName = &"QuillTabContextMenu"
+const CLOSE_BELOW_TEXTS: PackedStringArray = ["Close Tabs Below"]
+const MOVE_UP_TEXTS: PackedStringArray = ["Move Document Up", "Move Up"]
+const MOVE_DOWN_TEXTS: PackedStringArray = ["Move Document Down", "Move Down"]
+
+var godot_menu: PopupMenu
+var proxy_menu: PopupMenu
+var context_tab_idx: int = -1
+
+func _adapt_context_menu(tab_idx: int):
+	var popup: PopupMenu = _find_open_context_menu()
+	if not popup:
+		return
+	godot_menu = popup
+	context_tab_idx = tab_idx
+	_ensure_proxy_menu()
+	proxy_menu.clear()
+
+	var has_left: bool = false
+	var has_right: bool = false
+	for i: int in scripts_tab_container.get_tab_count():
+		if i == tab_idx or scripts_tab_container.is_tab_hidden(i):
+			continue
+		if i < tab_idx:
+			has_left = true
+		else:
+			has_right = true
+	var last_tab: int = scripts_tab_container.get_tab_count() - 1
+
+	for i: int in popup.item_count:
+		var text: String = popup.get_item_text(i)
+		if CLOSE_BELOW_TEXTS.has(text):
+			if has_left:
+				proxy_menu.add_item("Close Tabs to the Left", CLOSE_TABS_LEFT_ID)
+			if has_right:
+				proxy_menu.add_item("Close Tabs to the Right", CLOSE_TABS_RIGHT_ID)
+			continue
+		if MOVE_UP_TEXTS.has(text):
+			if tab_idx == 0:
+				continue
+			text = "Move Tab Left"
+		elif MOVE_DOWN_TEXTS.has(text):
+			if tab_idx == last_tab:
+				continue
+			text = "Move Tab Right"
+		_copy_menu_item(popup, i, text)
+
+	# Show ours where Godot's was, and put Godot's away without it acting on anything.
+	var at: Vector2i = popup.position
+	popup.hide()
+	proxy_menu.reset_size()
+	proxy_menu.popup(Rect2i(at, Vector2i.ZERO))
+
+func _ensure_proxy_menu():
+	if is_instance_valid(proxy_menu):
+		return
+	var base_control: Control = EditorInterface.get_base_control()
+	var stale: Node = base_control.get_node_or_null(NodePath(PROXY_MENU_NAME))
+	if stale:
+		base_control.remove_child(stale)
+		stale.queue_free()
+	proxy_menu = PopupMenu.new()
+	proxy_menu.name = PROXY_MENU_NAME
+	proxy_menu.id_pressed.connect(_on_proxy_id_pressed)
+	base_control.add_child(proxy_menu)
+
+# Copies one of Godot's items (same id, so it can be handed back). Its shortcut is shown as an
+# accelerator rather than copied: a copied shortcut could fire the command a second time.
+func _copy_menu_item(from: PopupMenu, index: int, text: String):
+	var id: int = from.get_item_id(index)
+	if from.is_item_separator(index):
+		proxy_menu.add_separator(text, id)
+		return
+	var accelerator: Key = from.get_item_accelerator(index)
+	var shortcut: Shortcut = from.get_item_shortcut(index)
+	if accelerator == KEY_NONE and shortcut:
+		for event: InputEvent in shortcut.events:
+			if event is InputEventKey:
+				accelerator = (event as InputEventKey).get_keycode_with_modifiers()
+				break
+	proxy_menu.add_item(text, id, accelerator)
+	var added: int = proxy_menu.item_count - 1
+	var icon: Texture2D = from.get_item_icon(index)
+	if icon:
+		proxy_menu.set_item_icon(added, icon)
+	proxy_menu.set_item_disabled(added, from.is_item_disabled(index))
+	proxy_menu.set_item_tooltip(added, from.get_item_tooltip(index))
+
+func _on_proxy_id_pressed(id: int):
+	if id == CLOSE_TABS_LEFT_ID:
+		close_tabs_beside(context_tab_idx, true)
+		return
+	if id == CLOSE_TABS_RIGHT_ID:
+		close_tabs_beside(context_tab_idx, false)
+		return
+	if not is_instance_valid(godot_menu):
+		return
+	# Hand Godot its own item, the same way its menu would have. Whichever signal it listens to.
+	if not godot_menu.id_pressed.get_connections().is_empty():
+		godot_menu.id_pressed.emit(id)
+	elif not godot_menu.index_pressed.get_connections().is_empty():
+		godot_menu.index_pressed.emit(godot_menu.get_item_index(id))
+
+## Closes the tabs left (or right) of this one. Pinned, unsaved and group-hidden tabs stay.
+func close_tabs_beside(tab_idx: int, left: bool):
+	if not scripts_tab_container or tab_idx < 0:
+		return
+	update_script_text_filter()
+	var tab_scripts: Dictionary[int, Script] = get_tab_scripts()
+	# Back to front either way, so a close never shifts a tab we haven't reached yet.
+	var indices: Array = range(tab_idx - 1, -1, -1) if left else range(scripts_tab_container.get_tab_count() - 1, tab_idx, -1)
+	_closing_tabs = true
+	for i: int in indices:
+		if scripts_tab_container.is_tab_hidden(i) or is_tab_pinned(i, tab_scripts) or _is_tab_unsaved(i):
+			continue
+		simulate_item_clicked(i, MOUSE_BUTTON_MIDDLE)
+	_closing_tabs = false
+	update_tabs.call_deferred()
+
+# Godot builds the menu right before showing it, so the visible one is the one just opened.
+func _find_open_context_menu() -> PopupMenu:
+	for node: Node in EditorInterface.get_script_editor().find_children("*", "PopupMenu", true, false):
+		if node is PopupMenu and node.visible and node != proxy_menu:
+			return node
+	return null
+#endregion
 
 func _on_tab_hovered(idx: int):
 	last_tab_hovered = idx
@@ -449,6 +652,8 @@ func _on_tab_bar_gui_input(event: InputEvent):
 	# Middle click closes a tab, like in a browser.
 	if event is InputEventMouseButton:
 		if event.is_pressed() and event.button_index == MOUSE_BUTTON_MIDDLE:
+			if is_tab_pinned(last_tab_hovered):
+				return
 			update_script_text_filter()
 			simulate_item_clicked(last_tab_hovered, MOUSE_BUTTON_MIDDLE)
 
