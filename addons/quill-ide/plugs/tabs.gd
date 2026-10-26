@@ -202,8 +202,29 @@ func update_script_list_visibility():
 func update_tabs():
 	if not scripts_tab_container:
 		return
+	var tab_scripts: Dictionary[int, Script] = get_tab_scripts()
 	for index: int in scripts_tab_container.get_tab_count():
-		update_tab(index)
+		update_tab(index, tab_scripts.get(index))
+
+# Maps tab index -> edited script. Both editor lists follow tab order, but get_open_scripts()
+# skips text files, so their editors are skipped here too to keep the two lists aligned.
+func get_tab_scripts() -> Dictionary[int, Script]:
+	var result: Dictionary[int, Script] = {}
+	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
+	var scripts: Array[Script] = script_editor.get_open_scripts()
+
+	var script_editors: Array[ScriptEditorBase] = []
+	for editor: ScriptEditorBase in script_editor.get_open_script_editors():
+		if editor.get_class() != &"TextEditor":
+			script_editors.append(editor)
+	if script_editors.size() != scripts.size():
+		return result
+
+	for i: int in scripts.size():
+		var tab: int = scripts_tab_container.get_tab_idx_from_control(script_editors[i])
+		if tab != -1:
+			result[tab] = scripts[i]
+	return result
 
 func update_tab(index: int, script_override: Script = null):
 	if not scripts_tab_container or not icon_manager:
@@ -212,7 +233,8 @@ func update_tab(index: int, script_override: Script = null):
 	if tab_control == null:
 		return
 
-	var script: Script = script_override if script_override else tab_control.get("script")
+	# Note: tab_control.get("script") is the editor node's own script (always null), not the edited one.
+	var script: Script = script_override if script_override else get_tab_scripts().get(index)
 	if script:
 		var name: String = script.resource_path.get_file()
 		if name == "":
