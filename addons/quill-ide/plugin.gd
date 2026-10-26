@@ -14,6 +14,7 @@ const NavigationHistory = preload("res://addons/quill-ide/plugs/history.gd")
 const ProjectFiles = preload("res://addons/quill-ide/plugs/project_files.gd")
 const SymbolParser = preload("res://addons/quill-ide/plugs/symbol_parser.gd")
 const UsagesPopup = preload("res://addons/quill-ide/plugs/usages_popup.gd")
+const SmoothCaretManager = preload("res://addons/quill-ide/plugs/smooth_caret_manager.gd")
 
 const QUICK_OPEN_SCENE: PackedScene = preload("res://addons/quill-ide/plugs/quick_open.tscn")
 #TODO dsada
@@ -44,6 +45,7 @@ var navigation_history: NavigationHistory
 var history_back_btn: Button
 var history_forward_btn: Button
 var usages_popup: UsagesPopup
+var smooth_caret_manager: SmoothCaretManager
 
 var quick_open_popup: QuickOpenPopup
 var quick_open_tween: Tween
@@ -73,6 +75,9 @@ func _enter_tree() -> void:
 
 	indent_guidelines_manager = IndentGuidelinesManager.new()
 	indent_guidelines_manager.init()
+
+	smooth_caret_manager = SmoothCaretManager.new()
+	smooth_caret_manager.init()
 
 	# Each of these hooks into the editor's own UI. If one can't find what it needs (usually after
 	# an engine update moved things around) only that feature is switched off, and we say so once.
@@ -147,6 +152,9 @@ func _exit_tree() -> void:
 	if indent_guidelines_manager:
 		indent_guidelines_manager.cleanup()
 		indent_guidelines_manager = null
+	if smooth_caret_manager:
+		smooth_caret_manager.cleanup()
+		smooth_caret_manager = null
 
 	if scene_changed.is_connected(_on_scene_changed):
 		scene_changed.disconnect(_on_scene_changed)
@@ -356,6 +364,8 @@ func _on_settings_changed() -> void:
 		icon_manager.handle_settings_change(changed_settings)
 	if indent_guidelines_manager:
 		indent_guidelines_manager.handle_settings_change(changed_settings)
+	if smooth_caret_manager:
+		smooth_caret_manager.handle_settings_change(changed_settings)
 	if tab_manager and settings_manager:
 		tab_manager.handle_settings_change(changed_settings, settings_manager)
 	if breadcrumb_bar:
@@ -450,7 +460,6 @@ func init_quick_open_shortcuts() -> void:
 		var event: InputEventKey = InputEventKey.new()
 		event.device = -1
 		event.keycode = KEY_SHIFT
-
 		shortcut.events = [event]
 		editor_settings.set_setting(OPEN_QUICK_SEARCH_POPUP, shortcut)
 
