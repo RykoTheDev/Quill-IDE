@@ -11,9 +11,12 @@ const IconManager = preload("uid://dqgi3yvglh3w4")
 const IndentGuidelinesManager = preload("res://addons/quill-ide/plugs/indent_guidelines.gd")
 const BreadcrumbBar = preload("res://addons/quill-ide/plugs/breadcrumbs.gd")
 const NavigationHistory = preload("res://addons/quill-ide/plugs/history.gd")
+const ProjectFiles = preload("res://addons/quill-ide/plugs/project_files.gd")
+const SymbolParser = preload("res://addons/quill-ide/plugs/symbol_parser.gd")
+const UsagesPopup = preload("res://addons/quill-ide/plugs/usages_popup.gd")
 
 const QUICK_OPEN_SCENE: PackedScene = preload("res://addons/quill-ide/plugs/quick_open.tscn")
-
+#TODO dsada
 const QUILL: StringName = &"Quill/"
 const QUICK_OPEN: StringName = QUILL + &"QuickOpen/"
 const OPEN_QUICK_SEARCH_POPUP: StringName = QUICK_OPEN + &"open_quick_search_popup"
@@ -29,6 +32,7 @@ const HISTORY_FORWARD: StringName = NAVIGATION + &"history_forward"
 const TOGGLE_BOOKMARK: StringName = NAVIGATION + &"toggle_bookmark"
 const NEXT_BOOKMARK: StringName = NAVIGATION + &"next_bookmark"
 const PREVIOUS_BOOKMARK: StringName = NAVIGATION + &"previous_bookmark"
+const FIND_USAGES: StringName = NAVIGATION + &"find_usages"
 
 var settings_manager: QuillSettingsManager
 var tab_manager: TabManager
@@ -39,6 +43,7 @@ var breadcrumb_bar: BreadcrumbBar
 var navigation_history: NavigationHistory
 var history_back_btn: Button
 var history_forward_btn: Button
+var usages_popup: UsagesPopup
 
 var quick_open_popup: QuickOpenPopup
 var quick_open_tween: Tween
@@ -54,6 +59,7 @@ var history_forward_shc: Shortcut
 var toggle_bookmark_shc: Shortcut
 var next_bookmark_shc: Shortcut
 var previous_bookmark_shc: Shortcut
+var find_usages_shc: Shortcut
 
 
 func _enter_tree() -> void:
@@ -68,33 +74,66 @@ func _enter_tree() -> void:
 	indent_guidelines_manager = IndentGuidelinesManager.new()
 	indent_guidelines_manager.init()
 
+	# Each of these hooks into the editor's own UI. If one can't find what it needs (usually after
+	# an engine update moved things around) only that feature is switched off, and we say so once.
+	var failed_features: PackedStringArray = []
+
 	tab_manager = TabManager.new()
-	tab_manager.init(settings_manager, icon_manager)
-	tab_manager.update_tabs()
+	if tab_manager.init(settings_manager, icon_manager):
+		tab_manager.update_tabs()
+	else:
+		tab_manager.cleanup()
+		tab_manager = null
+		failed_features.append("Script tabs")
 
 	outline_manager = OutlineManager.new()
-	outline_manager.init(settings_manager, icon_manager)
-
-	tab_manager.script_tab_changed.connect(outline_manager._on_active_script_changed)
+	if not outline_manager.init(settings_manager, icon_manager):
+		outline_manager.cleanup()
+		outline_manager = null
+		failed_features.append("Outline")
 
 	breadcrumb_bar = BreadcrumbBar.new()
-	if breadcrumb_bar.init(settings_manager, icon_manager):
-		breadcrumb_bar.top_level_symbol_changed.connect(outline_manager.follow_symbol)
-		tab_manager.script_tab_changed.connect(breadcrumb_bar._on_active_script_changed)
-	else:
+	if not breadcrumb_bar.init(settings_manager, icon_manager):
 		breadcrumb_bar.free()
 		breadcrumb_bar = null
+		failed_features.append("Breadcrumbs")
+
+	if tab_manager and outline_manager:
+		tab_manager.script_tab_changed.connect(outline_manager._on_active_script_changed)
+	if tab_manager and breadcrumb_bar:
+		tab_manager.script_tab_changed.connect(breadcrumb_bar._on_active_script_changed)
+	if breadcrumb_bar and outline_manager:
+		breadcrumb_bar.top_level_symbol_changed.connect(outline_manager.follow_symbol)
+
+	var base_control: Control = EditorInterface.get_base_control()
+	var stale_popup: Node = base_control.get_node_or_null(NodePath(UsagesPopup.NAME))
+	if stale_popup:
+		base_control.remove_child(stale_popup)
+		stale_popup.queue_free()
+	usages_popup = UsagesPopup.new()
+	base_control.add_child(usages_popup)
+	if outline_manager:
+		outline_manager.find_usages_requested.connect(usages_popup.show_usages)
 
 	navigation_history = NavigationHistory.new()
 	navigation_history.init()
-	scene_changed.connect(_on_scene_changed)
+	if not scene_changed.is_connected(_on_scene_changed):
+		scene_changed.connect(_on_scene_changed)
+	if not resource_saved.is_connected(_on_resource_saved):
+		resource_saved.connect(_on_resource_saved)
 	if breadcrumb_bar:
 		_add_history_buttons()
 
 	var file_system: EditorFileSystem = EditorInterface.get_resource_filesystem()
-	file_system.filesystem_changed.connect(schedule_update)
+	if not file_system.filesystem_changed.is_connected(schedule_update):
+		file_system.filesystem_changed.connect(schedule_update)
 
-	EditorInterface.get_editor_settings().settings_changed.connect(_on_settings_changed)
+	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
+	if not editor_settings.settings_changed.is_connected(_on_settings_changed):
+		editor_settings.settings_changed.connect(_on_settings_changed)
+
+	if not failed_features.is_empty():
+		ProjectFiles.toast("Quill IDE couldn't find parts of the script editor it needs, so these are turned off: %s. Everything else works. (Usually caused by a Godot update; restarting the editor can also help.)" % ", ".join(failed_features))
 
 func _exit_tree() -> void:
 	var file_system: EditorFileSystem = EditorInterface.get_resource_filesystem()
@@ -111,6 +150,8 @@ func _exit_tree() -> void:
 
 	if scene_changed.is_connected(_on_scene_changed):
 		scene_changed.disconnect(_on_scene_changed)
+	if resource_saved.is_connected(_on_resource_saved):
+		resource_saved.disconnect(_on_resource_saved)
 	if navigation_history:
 		navigation_history.cleanup()
 		navigation_history = null
@@ -119,10 +160,16 @@ func _exit_tree() -> void:
 		breadcrumb_bar = null
 	if outline_manager:
 		outline_manager.cleanup()
+		outline_manager = null
 	if tab_manager:
 		tab_manager.cleanup()
-	if quick_open_popup != null:
+		tab_manager = null
+	if is_instance_valid(quick_open_popup):
 		quick_open_popup.free()
+	quick_open_popup = null
+	if is_instance_valid(usages_popup):
+		usages_popup.queue_free()
+	usages_popup = null
 
 func _process(delta: float) -> void:
 	update_editor()
@@ -187,6 +234,8 @@ func _handle_navigation_input(event: InputEvent) -> void:
 		if outline_manager: outline_manager.goto_next_bookmark(1)
 	elif previous_bookmark_shc and previous_bookmark_shc.matches_event(event):
 		if outline_manager: outline_manager.goto_next_bookmark(-1)
+	elif find_usages_shc and find_usages_shc.matches_event(event):
+		_find_usages_at_caret()
 	else:
 		handled = false
 
@@ -209,6 +258,27 @@ func _toggle_bookmark_at_caret() -> void:
 		type = &"const"
 		modifier = &"enum"
 	outline_manager.toggle_bookmark(symbol[&"name"], type, modifier)
+
+# Usages of the word under the caret. If it's declared in this script we know whether it's a
+# signal or a function, which narrows down the scene connections we look at.
+func _find_usages_at_caret() -> void:
+	if not is_instance_valid(usages_popup):
+		return
+	var editor_base: ScriptEditorBase = EditorInterface.get_script_editor().get_current_editor()
+	if not editor_base or not editor_base.get_base_editor() is CodeEdit:
+		return
+	var code_edit: CodeEdit = editor_base.get_base_editor()
+	var word: String = code_edit.get_word_under_caret()
+	if word.is_empty() or not word.is_valid_identifier():
+		return
+
+	var kind: StringName = &""
+	for symbol: Dictionary in SymbolParser.parse(code_edit.text.split("\n"), code_edit.indent_size):
+		if symbol[&"name"] == word:
+			kind = symbol[&"kind"]
+			break
+	var script: Script = EditorInterface.get_script_editor().get_current_script()
+	usages_popup.show_usages(word, kind, script.resource_path if script else "")
 
 func _add_history_buttons() -> void:
 	var editor_theme: Theme = EditorInterface.get_editor_theme()
@@ -238,9 +308,21 @@ func _update_history_buttons() -> void:
 	history_back_btn.disabled = not navigation_history.can_go_back()
 	history_forward_btn.disabled = not navigation_history.can_go_forward()
 
+# The script editor has no "script saved" signal of its own; every save goes through here.
+func _on_resource_saved(resource: Resource) -> void:
+	if not resource is Script:
+		return
+	if tab_manager:
+		tab_manager.on_script_saved(resource)
+	if outline_manager:
+		outline_manager.on_script_saved(resource)
+
 func _on_scene_changed(scene_root: Node) -> void:
 	if navigation_history and scene_root and not scene_root.scene_file_path.is_empty():
 		navigation_history.record_recent_file(scene_root.scene_file_path)
+	# Signal connections shown in the outline come from the open scene.
+	if outline_manager:
+		outline_manager.update_outline()
 
 func _get_window_layout(configuration: ConfigFile) -> void:
 	if outline_manager and outline_manager.outline_width > 0:
@@ -285,12 +367,13 @@ func _on_settings_changed() -> void:
 func sync_navigation_settings(changed_settings: PackedStringArray) -> void:
 	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
 	for setting: String in changed_settings:
-		match (setting):
+		match StringName(setting):
 			HISTORY_BACK: history_back_shc = editor_settings.get_setting(HISTORY_BACK)
 			HISTORY_FORWARD: history_forward_shc = editor_settings.get_setting(HISTORY_FORWARD)
 			TOGGLE_BOOKMARK: toggle_bookmark_shc = editor_settings.get_setting(TOGGLE_BOOKMARK)
 			NEXT_BOOKMARK: next_bookmark_shc = editor_settings.get_setting(NEXT_BOOKMARK)
 			PREVIOUS_BOOKMARK: previous_bookmark_shc = editor_settings.get_setting(PREVIOUS_BOOKMARK)
+			FIND_USAGES: find_usages_shc = editor_settings.get_setting(FIND_USAGES)
 
 func get_current_script() -> Script:
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
@@ -437,6 +520,7 @@ func init_quick_open_shortcuts() -> void:
 	toggle_bookmark_shc = ensure_shortcut(TOGGLE_BOOKMARK, KEY_B, true, false)
 	next_bookmark_shc = ensure_shortcut(NEXT_BOOKMARK, KEY_N, true, false)
 	previous_bookmark_shc = ensure_shortcut(PREVIOUS_BOOKMARK, KEY_N, true, true)
+	find_usages_shc = ensure_shortcut(FIND_USAGES, KEY_F12, false, true)
 
 ## Gets the shortcut from editor settings, adding it with this default if it's not there yet.
 func ensure_shortcut(setting: StringName, keycode: Key, alt: bool, shift: bool) -> Shortcut:
@@ -458,7 +542,7 @@ func sync_quick_open_settings(changed_settings: PackedStringArray) -> void:
 		if (!setting.begins_with(QUICK_OPEN)):
 			continue
 
-		match (setting):
+		match StringName(setting):
 			OPEN_QUICK_SEARCH_POPUP:
 				open_quick_search_popup_shc = EditorInterface.get_editor_settings().get_setting(OPEN_QUICK_SEARCH_POPUP)
 			OPEN_QUICK_SEARCH_POPUP_SCENES:
@@ -499,14 +583,9 @@ func get_center_editor_rect(pref_size: Vector2 = Vector2(500, 400)) -> Rect2i:
 	var position: Vector2 = script_editor.global_position + script_editor.size / 2 - pref_size / 2
 	return Rect2i(position, pref_size)
 
+# Missing nodes are reported once as a toast at startup, so no error here.
 static func find_or_null(arr: Array[Node], index: int = 0) -> Node:
-	if arr.is_empty():
-		push_error("""
-		Node that is needed for Quill-IDE not found.
-		Plugin will not work correctly.
-		This might be due to some other plugins or changes in the Engine.
-		Please open an issue on Quill's Github, so we can figure out a fix.
-		""")
+	if index >= arr.size():
 		return null
 	return arr[index]
 

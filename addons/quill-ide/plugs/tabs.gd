@@ -7,7 +7,7 @@ var scripts_tab_container: TabContainer
 var scripts_tab_bar: TabBar
 var script_filter_txt: LineEdit
 var scripts_item_list: ItemList
-var panel_container: VSplitContainer
+var panel_container: Node
 
 var selected_tab: int = -1
 var last_tab_hovered: int = -1
@@ -26,23 +26,29 @@ const TAB_THEME: Theme = preload("uid://dr3t6l2rux68p")
 
 signal script_tab_changed(script: Script)
 
-func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
+## Returns false (and changes nothing) if the editor nodes we need aren't there.
+func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager) -> bool:
 	settings_manager = settings_mgr
 	icon_manager = icon_mgr
 
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
-	var split_container = find_or_null(script_editor.find_children("*", "HSplitContainer", true, false))
-	left_side_panel = split_container.get_child(0)
-
+	var split_container: Node = find_or_null(script_editor.find_children("*", "HSplitContainer", true, false))
 	# First ItemList in the script editor is the open-scripts list. We mostly hide it,
 	# but it's still what Godot uses to switch/close scripts, so we drive it from the tabs.
-	scripts_item_list = find_or_null(script_editor.find_children("*", "ItemList", true, false))
+	var found_list: ItemList = find_or_null(script_editor.find_children("*", "ItemList", true, false))
+	var found_filter: LineEdit = find_or_null(found_list.get_parent().find_children("*", "LineEdit", true, false)) if found_list else null
+	var found_tabs: TabContainer = find_or_null(script_editor.find_children("*", "TabContainer", true, false))
+	if not split_container or split_container.get_child_count() == 0 or not found_list or not found_filter or not found_tabs:
+		return false
+
+	left_side_panel = split_container.get_child(0)
+	scripts_item_list = found_list
 	scripts_item_list.allow_reselect = true
 
-	script_filter_txt = find_or_null(scripts_item_list.get_parent().find_children("*", "LineEdit", true, false))
+	script_filter_txt = found_filter
 	script_filter_txt.gui_input.connect(_on_script_filter_input)
 
-	scripts_tab_container = find_or_null(script_editor.find_children("*", "TabContainer", true, false))
+	scripts_tab_container = found_tabs
 	scripts_tab_bar = scripts_tab_container.get_tab_bar()
 
 	tab_state = TabStateCache.new()
@@ -73,36 +79,60 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 
 	if not script_editor.editor_script_changed.is_connected(_on_active_script_changed):
 		script_editor.editor_script_changed.connect(_on_active_script_changed)
+	return true
 
-	if not script_editor.script_changed.is_connected(_on_script_modified):
-		script_editor.script_changed.connect(_on_script_modified)
-
+# Safe to call more than once, or after a failed init.
 func cleanup():
-	if old_script_editor_base != null:
-		old_script_editor_base.edited_script_changed.disconnect(_on_script_changed)
+	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
+	if script_editor.editor_script_changed.is_connected(_on_active_script_changed):
+		script_editor.editor_script_changed.disconnect(_on_active_script_changed)
 
-	if scripts_tab_container != null:
+	if is_instance_valid(old_script_editor_base):
+		if old_script_editor_base.edited_script_changed.is_connected(_on_script_changed):
+			old_script_editor_base.edited_script_changed.disconnect(_on_script_changed)
+		var old_code_edit: Control = old_script_editor_base.get_base_editor()
+		if old_code_edit is CodeEdit and old_code_edit.text_changed.is_connected(_on_script_text_changed):
+			old_code_edit.text_changed.disconnect(_on_script_text_changed)
+	old_script_editor_base = null
+
+	if is_instance_valid(scripts_tab_container):
 		tab_state.restore(scripts_tab_container, scripts_tab_bar)
 
-		scripts_tab_bar.mouse_exited.disconnect(_on_tab_bar_mouse_exited)
-		scripts_tab_bar.gui_input.disconnect(_on_tab_bar_gui_input)
-		scripts_tab_bar.tab_close_pressed.disconnect(_on_tab_close)
-		scripts_tab_bar.tab_rmb_clicked.disconnect(_on_tab_rmb)
-		scripts_tab_bar.tab_hovered.disconnect(_on_tab_hovered)
-		scripts_tab_bar.active_tab_rearranged.disconnect(_on_active_tab_rearranged)
-		scripts_tab_bar.tab_changed.disconnect(_on_tab_changed)
+		for connection: Array in [
+			[scripts_tab_bar.mouse_exited, _on_tab_bar_mouse_exited],
+			[scripts_tab_bar.gui_input, _on_tab_bar_gui_input],
+			[scripts_tab_bar.tab_close_pressed, _on_tab_close],
+			[scripts_tab_bar.tab_rmb_clicked, _on_tab_rmb],
+			[scripts_tab_bar.tab_hovered, _on_tab_hovered],
+			[scripts_tab_bar.active_tab_rearranged, _on_active_tab_rearranged],
+			[scripts_tab_bar.tab_changed, _on_tab_changed],
+		]:
+			var tab_signal: Signal = connection[0]
+			if tab_signal.is_connected(connection[1]):
+				tab_signal.disconnect(connection[1])
 
-	if scripts_item_list != null:
+		# Undo _customize_tabbar.
+		for stylebox: StringName in [&"tab_unselected", &"tab_hovered", &"tab_selected", &"tab_focus"]:
+			scripts_tab_bar.remove_theme_stylebox_override(stylebox)
+	scripts_tab_container = null
+	scripts_tab_bar = null
+
+	if is_instance_valid(scripts_item_list):
 		scripts_item_list.allow_reselect = false
 		scripts_item_list.get_parent().visible = true
+	scripts_item_list = null
 
-		if script_filter_txt != null:
-			script_filter_txt.gui_input.disconnect(_on_script_filter_input)
+	if is_instance_valid(script_filter_txt) and script_filter_txt.gui_input.is_connected(_on_script_filter_input):
+		script_filter_txt.gui_input.disconnect(_on_script_filter_input)
+	script_filter_txt = null
 
-	if left_side_panel:
+	if is_instance_valid(left_side_panel):
 		left_side_panel.visible = true
+	left_side_panel = null
 
 func update_editor():
+	if not scripts_tab_container:
+		return
 	update_script_text_filter()
 
 	if sync_script_list:
@@ -129,9 +159,10 @@ func _close_other_tabs_deferred():
 	_close_all_except(scripts_tab_bar.current_tab)
 	_closing_tabs = false
 
-func _on_script_modified(script: Script):
-	if script == EditorInterface.get_script_editor().get_current_script():
-		update_tabs()
+## Called by the plugin when a script is saved to disk (EditorPlugin.resource_saved).
+func on_script_saved(_script: Script):
+	# Any tab could be the one saved (Save All), and update_tabs() is cheap.
+	update_tabs()
 
 func _customize_tabbar(tab_bar: TabBar) -> void:
 	var editor_settings = EditorInterface.get_editor_settings()
@@ -310,7 +341,7 @@ func _on_script_filter_input(event: InputEvent):
 func _on_tab_changed(index: int):
 	selected_tab = index
 
-	if old_script_editor_base != null:
+	if is_instance_valid(old_script_editor_base):
 		if old_script_editor_base.edited_script_changed.is_connected(_on_script_changed):
 			old_script_editor_base.edited_script_changed.disconnect(_on_script_changed)
 		var old_code_edit: CodeEdit = old_script_editor_base.get_base_editor()
@@ -469,9 +500,9 @@ func navigate_list(list: ItemList, index: int, amount: int):
 	list.ensure_current_is_visible()
 	list.accept_event()
 
+# Missing nodes are reported once by the plugin as a toast, so no error here.
 static func find_or_null(arr: Array[Node], index: int = 0) -> Node:
-	if arr.is_empty():
-		push_error("Required node not found for Script-IDE Tab Manager")
+	if index >= arr.size():
 		return null
 	return arr[index]
 
@@ -482,6 +513,7 @@ class TabStateCache:
 	var tab_bar_drag_to_rearrange_enabled: bool
 	var tab_close_display_policy: TabBar.CloseButtonDisplayPolicy
 	var select_with_rmb: bool
+	var tab_bar_theme: Theme
 
 	func save(tab_container: TabContainer, tab_bar: TabBar):
 		if tab_container != null:
@@ -492,13 +524,15 @@ class TabStateCache:
 			tab_close_display_policy = tab_bar.tab_close_display_policy
 			select_with_rmb = tab_bar.select_with_rmb
 			auto_translate_mode_state = tab_bar.auto_translate_mode
+			tab_bar_theme = tab_bar.theme
 
 	func restore(tab_container: TabContainer, tab_bar: TabBar):
 		if tab_container != null:
 			tab_container.tabs_visible = tabs_visible
 			tab_container.drag_to_rearrange_enabled = drag_to_rearrange_enabled
 		if tab_bar != null:
-			tab_bar.drag_to_rearrange_enabled = drag_to_rearrange_enabled
+			tab_bar.drag_to_rearrange_enabled = tab_bar_drag_to_rearrange_enabled
 			tab_bar.tab_close_display_policy = tab_close_display_policy
 			tab_bar.select_with_rmb = select_with_rmb
 			tab_bar.auto_translate_mode = auto_translate_mode_state
+			tab_bar.theme = tab_bar_theme

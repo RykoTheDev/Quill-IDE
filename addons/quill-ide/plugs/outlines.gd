@@ -1,6 +1,19 @@
 @tool
 class_name OutlineManager
 
+const SymbolParser = preload("res://addons/quill-ide/plugs/symbol_parser.gd")
+const ProjectFiles = preload("res://addons/quill-ide/plugs/project_files.gd")
+const MemberSorter = preload("res://addons/quill-ide/plugs/member_sorter.gd")
+const TodoPanel = preload("res://addons/quill-ide/plugs/todo_panel.gd")
+
+## From the right-click menu; the plugin owns the popup that shows the results.
+signal find_usages_requested(symbol_name: String, kind: StringName, script_path: String)
+
+enum MenuId { BOOKMARK, FIND_USAGES, GETTER_SETTER, EXPORT_GROUP, DOC_COMMENT, SORT_MEMBERS }
+
+# Metadata type of the "-> Node.method()" rows under a signal.
+const CONNECTION_TYPE: StringName = &"connection"
+
 const UNDERSCORE: StringName = &"_"
 const INLINE: StringName = &"@"
 const GETTER: StringName = &"get"
@@ -16,6 +29,11 @@ const CONSTANTS: StringName = &"Constants"
 const BOOKMARKS: StringName = &"Bookmarks"
 const MAX_BOOKMARKS_HEIGHT: int = 150
 const DEFAULT_OUTLINE_WIDTH: int = 250
+
+# Every node we add is named with this prefix so leftovers from a dead instance can be found.
+const STALE_NODE_PREFIX: String = "Quill"
+const OUTLINE_TREE_NAME: StringName = &"QuillOutlineTree"
+const NATIVE_OUTLINE_META: StringName = &"_quill_native_outline"
 
 var outline_container: Control
 var outline_parent: Control
@@ -57,15 +75,25 @@ var old_script_type: StringName
 var settings_manager: QuillSettingsManager
 var icon_manager: IconManager
 
-func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
+## Returns false (and leaves the editor untouched) if the nodes we need aren't there.
+func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager) -> bool:
 	settings_manager = settings_mgr
 	icon_manager = icon_mgr
 
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
 	split_container = find_or_null(script_editor.find_children("*", "HSplitContainer", true, false))
-	if not split_container or split_container.get_child_count() == 0:
-		return
-	outline_container = split_container.get_child(0)
+	if not split_container:
+		return false
+	# The column with the lists in it. Usually child 0, but a stale instance may have left it on the right.
+	for child: Node in split_container.get_children():
+		if not child.find_children("*", "ItemList", true, false).is_empty():
+			outline_container = child
+			break
+	if not outline_container:
+		split_container = null
+		return false
+
+	_recover_from_stale_instance()
 
 	# Find everything first, so if something's missing we bail before changing the editor UI.
 	var found_outline: Control = _find_native_outline()
@@ -78,10 +106,14 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	if not found_outline or not found_filter or not found_sort:
 		outline_container = null
 		split_container = null
-		return
+		return false
 
-	EditorInterface.get_editor_settings().settings_changed.connect(_on_editor_settings_changed)
+	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
+	if not editor_settings.settings_changed.is_connected(_on_editor_settings_changed):
+		editor_settings.settings_changed.connect(_on_editor_settings_changed)
 
+	if outline_container.get_index() != 0:
+		split_container.move_child(outline_container, 0)
 	editor_container = split_container.get_child(1) if split_container.get_child_count() > 1 else null
 	outline_size_flags = outline_container.size_flags_horizontal
 	if editor_container:
@@ -89,7 +121,8 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	# With the outline on the left, Godot's split offset is the panel width.
 	if outline_width <= 0:
 		outline_width = split_container.split_offset if split_container.split_offset > 0 else roundi(DEFAULT_OUTLINE_WIDTH * EditorInterface.get_editor_scale())
-	split_container.dragged.connect(_on_split_dragged)
+	if not split_container.dragged.is_connected(_on_split_dragged):
+		split_container.dragged.connect(_on_split_dragged)
 
 	if settings_manager.is_outline_right:
 		update_outline_position()
@@ -98,8 +131,12 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	outline_parent = old_outline.get_parent()
 	var old_outline_index: int = old_outline.get_index()
 	outline_parent.remove_child(old_outline)
+	# Remember the detached native outline on its parent, so a later instance can put it back
+	# even if this one dies without running cleanup().
+	outline_parent.set_meta(NATIVE_OUTLINE_META, old_outline)
 
 	outline_tree = Tree.new()
+	outline_tree.name = OUTLINE_TREE_NAME
 	outline_tree.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	outline_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	outline_tree.hide_root = true
@@ -129,64 +166,100 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager):
 	if not script_editor.editor_script_changed.is_connected(_on_active_script_changed):
 		script_editor.editor_script_changed.connect(_on_active_script_changed)
 
-	if not script_editor.script_changed.is_connected(_on_script_modified):
-		script_editor.script_changed.connect(_on_script_modified)
-
 	_add_collapse_buttons()
 	_add_bookmarks_section()
+	_add_todo_section()
 	_add_scroll_buttons()
 
 	_update_outline_ui_visibility()
+	return true
 
+# Removes anything a previous instance left in the outline column and puts back the native
+# outline it had taken out.
+func _recover_from_stale_instance():
+	for node: Node in outline_container.find_children(STALE_NODE_PREFIX + "*", "", true, false):
+		var parent: Node = node.get_parent()
+		if node.name == OUTLINE_TREE_NAME and parent.has_meta(NATIVE_OUTLINE_META):
+			var native: Variant = parent.get_meta(NATIVE_OUTLINE_META)
+			if is_instance_valid(native) and native.get_parent() == null:
+				parent.add_child(native)
+				parent.move_child(native, node.get_index())
+			parent.remove_meta(NATIVE_OUTLINE_META)
+		_free_node(node)
+
+static func _free_node(node: Node):
+	if not is_instance_valid(node):
+		return
+	if node.get_parent():
+		node.get_parent().remove_child(node)
+	if not node.is_queued_for_deletion():
+		node.queue_free()
+
+# Safe to call more than once, or after a failed init.
 func cleanup():
-	if split_container != null:
-		if outline_container and split_container != outline_container.get_parent():
-			split_container.add_child(outline_container)
+	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
+	if editor_settings.settings_changed.is_connected(_on_editor_settings_changed):
+		editor_settings.settings_changed.disconnect(_on_editor_settings_changed)
+	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
+	if script_editor.editor_script_changed.is_connected(_on_active_script_changed):
+		script_editor.editor_script_changed.disconnect(_on_active_script_changed)
 
-		if outline_container:
+	if is_instance_valid(split_container):
+		if is_instance_valid(outline_container):
+			if outline_container.get_parent() != split_container:
+				split_container.add_child(outline_container)
 			split_container.move_child(outline_container, 0)
 			outline_container.size_flags_horizontal = outline_size_flags
-			if editor_container:
+			if is_instance_valid(editor_container):
 				editor_container.size_flags_horizontal = editor_size_flags
 			split_container.split_offset = outline_width
-
 		if split_container.dragged.is_connected(_on_split_dragged):
 			split_container.dragged.disconnect(_on_split_dragged)
 
-		if outline_filter_txt:
-			if outline_filter_txt.gui_input.is_connected(_on_outline_filter_input):
-				outline_filter_txt.gui_input.disconnect(_on_outline_filter_input)
-			if outline_filter_txt.text_changed.is_connected(_on_outline_filter_changed):
-				outline_filter_txt.text_changed.disconnect(_on_outline_filter_changed)
-		if sort_btn:
-			if sort_btn.pressed.is_connected(update_outline):
-				sort_btn.pressed.disconnect(update_outline)
-		if outline_tree:
-			if outline_tree.item_selected.is_connected(_on_outline_item_selected):
-				outline_tree.item_selected.disconnect(_on_outline_item_selected)
-			if outline_tree.item_collapsed.is_connected(_on_outline_item_collapsed):
-				outline_tree.item_collapsed.disconnect(_on_outline_item_collapsed)
-			if outline_tree.gui_input.is_connected(_on_outline_tree_gui_input):
-				outline_tree.gui_input.disconnect(_on_outline_tree_gui_input)
-			if context_menu:
-				context_menu.queue_free()
-				context_menu = null
+	if is_instance_valid(outline_filter_txt):
+		if outline_filter_txt.gui_input.is_connected(_on_outline_filter_input):
+			outline_filter_txt.gui_input.disconnect(_on_outline_filter_input)
+		if outline_filter_txt.text_changed.is_connected(_on_outline_filter_changed):
+			outline_filter_txt.text_changed.disconnect(_on_outline_filter_changed)
+	if is_instance_valid(sort_btn) and sort_btn.pressed.is_connected(update_outline):
+		sort_btn.pressed.disconnect(update_outline)
 
-		if outline_parent and outline_tree:
+	if is_instance_valid(outline_tree):
+		# Put the native outline back where our tree was. The context menu goes with our tree.
+		if is_instance_valid(outline_parent) and is_instance_valid(old_outline) and old_outline.get_parent() == null:
 			outline_parent.add_child(old_outline)
 			outline_parent.move_child(old_outline, outline_tree.get_index())
-			outline_parent.remove_child(outline_tree)
-			outline_tree.free()
+		if outline_tree.get_parent():
+			outline_tree.get_parent().remove_child(outline_tree)
+		outline_tree.free()
+	if is_instance_valid(outline_parent) and outline_parent.has_meta(NATIVE_OUTLINE_META):
+		outline_parent.remove_meta(NATIVE_OUTLINE_META)
 
-		if bookmarks_container:
-			bookmarks_container.queue_free()
-			bookmarks_container = null
-		if collapse_button_container:
-			collapse_button_container.queue_free()
-			collapse_button_container = null
-		if scroll_button_container:
-			scroll_button_container.queue_free()
-			scroll_button_container = null
+	_free_node(bookmarks_container)
+	_free_node(collapse_button_container)
+	_free_node(scroll_button_container)
+	_free_node(todo_container)
+
+	outline_tree = null
+	outline_root = null
+	context_menu = null
+	highlighted_item = null
+	category_items.clear()
+	bookmarks_container = null
+	bookmarks_tree = null
+	bookmarks_root = null
+	bookmarks_context_menu = null
+	bookmark_rename_dialog = null
+	collapse_button_container = null
+	scroll_button_container = null
+	todo_container = null
+	outline_filter_txt = null
+	sort_btn = null
+	old_outline = null
+	outline_parent = null
+	outline_container = null
+	editor_container = null
+	split_container = null
 
 func update_editor():
 	if not outline_tree:
@@ -194,6 +267,8 @@ func update_editor():
 	update_outline_cache()
 	update_outline()
 	_update_bookmarks_ui()
+	if todo_container:
+		todo_container.refresh()
 
 func _on_editor_settings_changed():
 	if not settings_manager:
@@ -205,6 +280,7 @@ func _on_editor_settings_changed():
 		update_outline_position()
 	if settings_manager.is_outline_hidden != old_hidden:
 		_update_outline_ui_visibility()
+	_update_outline_ui_visibility()
 	update_outline_cache()
 	update_outline()
 	_update_bookmarks_ui()
@@ -216,11 +292,14 @@ func _on_active_script_changed(script: Script):
 	update_outline_cache()
 	update_outline()
 
-func _on_script_modified(script: Script):
+## Called by the plugin when a script is saved to disk (EditorPlugin.resource_saved).
+func on_script_saved(script: Script):
+	if not outline_tree:
+		return
 	if script == EditorInterface.get_script_editor().get_current_script():
 		update_outline_cache()
 		update_outline()
-		_cleanup_stale_bookmarks()
+	_cleanup_stale_bookmarks(script)
 
 func update_outline_position():
 	if not settings_manager or not split_container or not outline_container:
@@ -343,6 +422,7 @@ func update_outline():
 		return
 
 	var filter_text: String = outline_filter_txt.get_text().to_lower() if outline_filter_txt else ""
+	var scene_connections: Dictionary = _get_scene_connections()
 
 	var categories_data = [
 		{&"name": ENGINE_FUNCS, &"items": outline_cache.engine_funcs, &"icon": icon_manager.engine_func_icon, &"type": &"func", &"enabled": settings_manager.show_engine_funcs},
@@ -394,7 +474,77 @@ func update_outline():
 			}
 			item_node.set_metadata(0, metadata)
 
+			if category_data[&"type"] == &"signal" and scene_connections.has(item):
+				_add_connection_items(item_node, scene_connections[item])
+
 	_apply_followed_symbol(false)
+
+# Connections to this script's signals that were made in the open scene, keyed by signal name.
+# Only saved (editor-made) ones; anything connected from code at runtime isn't there to read.
+func _get_scene_connections() -> Dictionary:
+	var result: Dictionary = {}
+	var script: Script = EditorInterface.get_script_editor().get_current_script()
+	var root: Node = EditorInterface.get_edited_scene_root()
+	if not script or not root or not outline_cache or outline_cache.signals.is_empty():
+		return result
+
+	var nodes: Array[Node] = [root]
+	nodes.append_array(root.find_children("*", "", true, true))
+	for node: Node in nodes:
+		if node.get_script() != script:
+			continue
+		for signal_name: String in outline_cache.signals:
+			for connection: Dictionary in node.get_signal_connection_list(signal_name):
+				if not (connection["flags"] & CONNECT_PERSIST):
+					continue
+				var callable: Callable = connection["callable"]
+				var target: Object = callable.get_object()
+				if not target is Node:
+					continue
+				if not result.has(signal_name):
+					result[signal_name] = []
+				result[signal_name].append({
+					&"source": String(root.get_path_to(node)),
+					&"target": String(root.get_path_to(target)),
+					&"method": String(callable.get_method()),
+				})
+	return result
+
+func _add_connection_items(signal_item: TreeItem, connections: Array):
+	signal_item.set_suffix(0, "  (%d)" % connections.size())
+	signal_item.collapsed = false
+	# Only worth naming the emitter when more than one node in the scene uses this script.
+	var first_source: String = connections[0][&"source"]
+	var show_source: bool = connections.any(func(c: Dictionary) -> bool: return c[&"source"] != first_source)
+	var slot_icon: Texture2D = EditorInterface.get_editor_theme().get_icon(&"Slot", &"EditorIcons")
+
+	for connection: Dictionary in connections:
+		var text: String = "%s.%s()" % [connection[&"target"], connection[&"method"]]
+		if show_source:
+			text = "%s  ->  %s" % [connection[&"source"], text]
+		var child: TreeItem = outline_tree.create_item(signal_item)
+		child.set_text(0, text)
+		child.set_icon(0, slot_icon)
+		child.set_custom_color(0, Color(1, 1, 1, 0.65))
+		child.set_tooltip_text(0, "Connected in the open scene. Click to go to the method.")
+		child.set_metadata(0, { &"type": CONNECTION_TYPE, &"target": connection[&"target"], &"method": connection[&"method"] })
+
+# Jumps to the receiving method if the target has a script, otherwise selects the node.
+func _open_connection(metadata: Dictionary):
+	var root: Node = EditorInterface.get_edited_scene_root()
+	var target: Node = root.get_node_or_null(NodePath(metadata[&"target"])) if root else null
+	if not target:
+		return
+	var target_script: Script = target.get_script()
+	if target_script:
+		var path: String = target_script.resource_path
+		for symbol: Dictionary in SymbolParser.parse(ProjectFiles.read_lines(path)):
+			if symbol[&"kind"] == SymbolParser.KIND_FUNC and symbol[&"name"] == metadata[&"method"]:
+				ProjectFiles.open_script_at(path, symbol[&"line"])
+				return
+	var selection: EditorSelection = EditorInterface.get_selection()
+	selection.clear()
+	selection.add_node(target)
 
 func follow_symbol(symbol_name: String):
 	followed_symbol = symbol_name
@@ -468,6 +618,9 @@ func scroll_to_outline_item():
 		return
 	if not selected_item.get_metadata(0):
 		return
+	if selected_item.get_metadata(0).get(&"type") == CONNECTION_TYPE:
+		_open_connection(selected_item.get_metadata(0))
+		return
 
 	var script: Script = EditorInterface.get_script_editor().get_current_script()
 	if not script:
@@ -507,56 +660,271 @@ func _on_outline_item_collapsed(item: TreeItem):
 func _on_outline_tree_gui_input(event: InputEvent):
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		var item: TreeItem = outline_tree.get_item_at_position(event.position)
-		if item and item.get_metadata(0):
+		var metadata: Variant = item.get_metadata(0) if item else null
+		# Members get the full menu. Categories, connection rows and empty space only get the
+		# script-wide actions.
+		if metadata and metadata.get(&"type") != CONNECTION_TYPE:
 			item.select(0)
 			_show_context_menu(item, event.position)
+		else:
+			_show_context_menu(null, event.position)
+		outline_tree.accept_event()
 
 func _show_context_menu(item: TreeItem, at_position: Vector2):
 	context_menu.clear()
-
-	var metadata: Dictionary = item.get_metadata(0)
-	var name: String = item.get_text(0)
-	var script: Script = EditorInterface.get_script_editor().get_current_script()
-	var item_icon: Texture2D = item.get_icon(0)
-
 	context_menu.set_meta(&"target_item", item)
 
-	var script_path: String = script.resource_path if script else &""
-	var already_bookmarked: bool = false
-	if not script_path.is_empty():
-		already_bookmarked = settings_manager.is_bookmarked(script_path, name)
+	if item:
+		var metadata: Dictionary = item.get_metadata(0)
+		var type: StringName = metadata[&"type"]
+		var script: Script = EditorInterface.get_script_editor().get_current_script()
+		var bookmarked: bool = script != null and settings_manager.is_bookmarked(script.resource_path, item.get_text(0))
 
-	if already_bookmarked:
-		context_menu.add_icon_item(item_icon, "Remove Bookmark", 0)
-	else:
-		context_menu.add_icon_item(item_icon, "Add Bookmark", 0)
+		context_menu.add_icon_item(item.get_icon(0), "Remove Bookmark" if bookmarked else "Add Bookmark", MenuId.BOOKMARK)
+		context_menu.add_item("Find Usages", MenuId.FIND_USAGES)
+		context_menu.add_separator()
+		if type == &"var":
+			context_menu.add_item("Generate Getter/Setter", MenuId.GETTER_SETTER)
+		if metadata[&"modifier"] == &"@export":
+			context_menu.add_item("Add @export_group Above", MenuId.EXPORT_GROUP)
+		context_menu.add_item("Add Doc Comment", MenuId.DOC_COMMENT)
+		context_menu.add_separator()
 
+	context_menu.add_item("Sort Script Members", MenuId.SORT_MEMBERS)
+	context_menu.set_item_tooltip(context_menu.get_item_index(MenuId.SORT_MEMBERS),
+		"Reorder the whole script to match the outline's category order. Undo with Ctrl+Z.")
+
+	context_menu.reset_size()
 	context_menu.position = Vector2i(outline_tree.get_screen_position()) + Vector2i(at_position)
 	context_menu.popup()
 
 func _on_context_menu_id_pressed(id: int):
-	var item: TreeItem = context_menu.get_meta(&"target_item")
-	if not item:
+	if id == MenuId.SORT_MEMBERS:
+		sort_script_members()
 		return
 
+	# The meta is gone when it was set to null (Object.set_meta erases on null), hence the default.
+	# Read it untyped first: if the outline was rebuilt while the menu was open the item is freed,
+	# and assigning a freed object to a typed variable errors before we could check it.
+	var target: Variant = context_menu.get_meta(&"target_item", null)
+	if not is_instance_valid(target) or not target.get_metadata(0):
+		return
+	var item: TreeItem = target
 	var metadata: Dictionary = item.get_metadata(0)
 	var name: String = item.get_text(0)
+	var type: StringName = metadata[&"type"]
 
-	if id == 0:
-		var script: Script = EditorInterface.get_script_editor().get_current_script()
-		if script:
-			var script_path: String = script.resource_path
-			if settings_manager.is_bookmarked(script_path, name):
-				settings_manager.remove_bookmark(script_path, name)
-			else:
-				settings_manager.add_bookmark(
-					script_path,
-					name,
-					metadata[&"type"],
-					metadata.get(&"modifier", &"")
-				)
-		update_outline()
-		_update_bookmarks_ui()
+	match id:
+		MenuId.BOOKMARK:
+			toggle_bookmark(name, type, metadata.get(&"modifier", &""))
+			update_outline()
+		MenuId.FIND_USAGES:
+			var script: Script = EditorInterface.get_script_editor().get_current_script()
+			find_usages_requested.emit(name, type, script.resource_path if script else "")
+		MenuId.GETTER_SETTER:
+			_generate_getter_setter(name)
+		MenuId.EXPORT_GROUP:
+			_add_export_group(name)
+		MenuId.DOC_COMMENT:
+			_add_doc_comment(name)
+
+#region Code generation
+# These edit the open CodeEdit (not the file), each as a single undo step.
+
+func _get_code_edit() -> CodeEdit:
+	var editor_base: ScriptEditorBase = EditorInterface.get_script_editor().get_current_editor()
+	if editor_base and editor_base.get_base_editor() is CodeEdit:
+		return editor_base.get_base_editor()
+	return null
+
+# Finds a top-level member in the live editor text. Empty if it isn't there (e.g. inherited).
+func _find_member(code_edit: CodeEdit, name: String) -> Dictionary:
+	for symbol: Dictionary in SymbolParser.parse(code_edit.text.split("\n"), code_edit.indent_size):
+		if symbol[&"parent"] == -1 and symbol[&"name"] == name:
+			return symbol
+	return {}
+
+func _indent_unit(code_edit: CodeEdit) -> String:
+	return " ".repeat(code_edit.indent_size) if code_edit.indent_use_spaces else "\t"
+
+static func _leading_whitespace(line: String) -> String:
+	return line.substr(0, line.length() - line.lstrip(" \t").length())
+
+# First line of the block above a member that belongs to it: annotations and ## doc comments.
+static func _block_start(code_edit: CodeEdit, line: int) -> int:
+	while line > 0:
+		var above: String = code_edit.get_line(line - 1).strip_edges()
+		if not (above.begins_with("@") or above.begins_with("##")):
+			break
+		line -= 1
+	return line
+
+# Splits off a trailing # comment, ignoring # inside strings. Returns [code, comment].
+static func _split_comment(line: String) -> PackedStringArray:
+	var quote: String = ""
+	var i: int = 0
+	while i < line.length():
+		var c: String = line[i]
+		if not quote.is_empty():
+			if c == "\\":
+				i += 1
+			elif c == quote:
+				quote = ""
+		elif c == "\"" or c == "'":
+			quote = c
+		elif c == "#":
+			return [line.substr(0, i), line.substr(i)]
+		i += 1
+	return [line, ""]
+
+func _generate_getter_setter(name: String):
+	var code_edit: CodeEdit = _get_code_edit()
+	if not code_edit:
+		return
+	var symbol: Dictionary = _find_member(code_edit, name)
+	if symbol.is_empty() or symbol[&"kind"] != SymbolParser.KIND_VAR:
+		return
+	var line_index: int = symbol[&"line"]
+	var parts: PackedStringArray = _split_comment(code_edit.get_line(line_index))
+	var code: String = parts[0].rstrip(" \t")
+	# Something indented under it already means accessors (or a multi-line value); don't touch.
+	if symbol[&"end_line"] != line_index or code.ends_with(":"):
+		ProjectFiles.toast("'%s' already has a getter/setter or spans several lines, so it was left alone." % name)
+		return
+
+	var base: String = _leading_whitespace(code)
+	var unit: String = _indent_unit(code_edit)
+	var declaration: String = code + ":" + (("  " + parts[1]) if not parts[1].is_empty() else "")
+	var body: PackedStringArray = [
+		"",
+		base + unit + "get:",
+		base + unit + unit + "return " + name,
+		base + unit + "set(value):",
+		base + unit + unit + name + " = value",
+	]
+
+	code_edit.begin_complex_operation()
+	code_edit.set_line(line_index, declaration)
+	code_edit.insert_text("\n".join(body), line_index, declaration.length())
+	code_edit.end_complex_operation()
+
+	code_edit.set_caret_line(line_index + 4)
+	code_edit.set_caret_column(code_edit.get_line(line_index + 4).length())
+	code_edit.grab_focus()
+
+func _add_export_group(name: String):
+	var code_edit: CodeEdit = _get_code_edit()
+	if not code_edit:
+		return
+	var symbol: Dictionary = _find_member(code_edit, name)
+	if symbol.is_empty():
+		return
+	var insert_at: int = _block_start(code_edit, symbol[&"line"])
+	var group_line: String = _leading_whitespace(code_edit.get_line(symbol[&"line"])) + "@export_group(\"Group\")"
+
+	code_edit.begin_complex_operation()
+	code_edit.insert_line_at(insert_at, group_line)
+	code_edit.end_complex_operation()
+
+	# Leave "Group" selected so you can just type the name.
+	var column: int = group_line.find("Group")
+	code_edit.select(insert_at, column, insert_at, column + "Group".length())
+	code_edit.grab_focus()
+
+func _add_doc_comment(name: String):
+	var code_edit: CodeEdit = _get_code_edit()
+	if not code_edit:
+		return
+	var symbol: Dictionary = _find_member(code_edit, name)
+	if symbol.is_empty():
+		return
+	var line_index: int = symbol[&"line"]
+	var insert_at: int = _block_start(code_edit, line_index)
+	# Already documented: just put the caret there.
+	if code_edit.get_line(insert_at).strip_edges().begins_with("##"):
+		code_edit.set_caret_line(insert_at)
+		code_edit.set_caret_column(code_edit.get_line(insert_at).length())
+		code_edit.grab_focus()
+		return
+
+	var base: String = _leading_whitespace(code_edit.get_line(line_index))
+	var doc: PackedStringArray = [base + "## "]
+	if symbol[&"kind"] == SymbolParser.KIND_FUNC or symbol[&"kind"] == SymbolParser.KIND_SIGNAL:
+		for param: String in _parse_params(code_edit, line_index):
+			doc.append(base + "## [param %s] " % param)
+
+	code_edit.begin_complex_operation()
+	code_edit.insert_text("\n".join(doc) + "\n", insert_at, 0)
+	code_edit.end_complex_operation()
+
+	code_edit.set_caret_line(insert_at)
+	code_edit.set_caret_column(doc[0].length())
+	code_edit.grab_focus()
+
+# Parameter names of the func/signal declared on this line (the list may span several lines).
+static func _parse_params(code_edit: CodeEdit, line_index: int) -> PackedStringArray:
+	# No ( on the declaration line means no parameter list at all (e.g. "signal died"). Don't go
+	# looking further down, or we'd pick up the next function's parameters.
+	var text: String = _split_comment(code_edit.get_line(line_index))[0]
+	var open: int = text.find("(")
+	if open == -1:
+		return PackedStringArray()
+	# Only pull in following lines while the list is still open.
+	var next_line: int = line_index + 1
+	while text.count("(") > text.count(")") and next_line < mini(line_index + 30, code_edit.get_line_count()):
+		text += " " + _split_comment(code_edit.get_line(next_line))[0]
+		next_line += 1
+
+	# Walk to the matching ), splitting on commas that aren't nested in a default value.
+	var params: PackedStringArray = []
+	var depth: int = 0
+	var current: String = ""
+	for i: int in range(open + 1, text.length()):
+		var c: String = text[i]
+		if c in "([{":
+			depth += 1
+		elif c in ")]}":
+			if depth == 0:
+				params.append(current)
+				break
+			depth -= 1
+		elif c == "," and depth == 0:
+			params.append(current)
+			current = ""
+			continue
+		current += c
+
+	var names: PackedStringArray = []
+	for param: String in params:
+		var param_name: String = param.strip_edges()
+		for separator: String in [":", "=", " "]:
+			param_name = param_name.get_slice(separator, 0)
+		if not param_name.is_empty():
+			names.append(param_name)
+	return names
+#endregion
+
+## Reorders the current script's members into the outline's category order, as one undo step.
+func sort_script_members():
+	var code_edit: CodeEdit = _get_code_edit()
+	if not code_edit or not EditorInterface.get_script_editor().get_current_script() is GDScript:
+		return
+	var result: Dictionary = MemberSorter.sort(code_edit.text.split("\n"), settings_manager.outline_order, keywords, code_edit.get_caret_line())
+	if not result[&"ok"]:
+		ProjectFiles.toast("Couldn't sort the members: " + result[&"error"])
+		return
+	if result[&"text"] == code_edit.text:
+		return
+
+	code_edit.begin_complex_operation()
+	code_edit.select_all()
+	code_edit.insert_text_at_caret(result[&"text"])
+	code_edit.end_complex_operation()
+
+	code_edit.deselect()
+	code_edit.set_caret_line(result[&"caret_line"])
+	code_edit.center_viewport_to_caret()
+	code_edit.grab_focus()
 
 func _on_bookmarks_tree_item_selected():
 	var item: TreeItem = bookmarks_tree.get_selected()
@@ -592,9 +960,11 @@ func _show_bookmarks_context_menu(item: TreeItem, at_position: Vector2):
 	bookmarks_context_menu.popup()
 
 func _on_bookmarks_context_menu_id_pressed(id: int):
-	var item: TreeItem = bookmarks_context_menu.get_meta(&"target_item")
-	if not item:
+	# Untyped first, in case the list was rebuilt (and the item freed) while the menu was open.
+	var target: Variant = bookmarks_context_menu.get_meta(&"target_item", null)
+	if not is_instance_valid(target):
 		return
+	var item: TreeItem = target
 
 	var metadata: Dictionary = item.get_metadata(0)
 	var script_path: String = metadata[&"script_path"]
@@ -681,6 +1051,7 @@ func _navigate_to_bookmark_deferred(metadata: Dictionary) -> void:
 
 func _add_bookmarks_section():
 	bookmarks_container = VBoxContainer.new()
+	bookmarks_container.name = &"QuillBookmarks"
 	bookmarks_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bookmarks_container.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	bookmarks_container.custom_minimum_size.y = 24
@@ -771,6 +1142,22 @@ func _add_bookmarks_section():
 
 	_update_bookmarks_ui()
 
+func _add_todo_section():
+	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
+	var base_color: Color = editor_settings.get_setting("interface/theme/base_color")
+	var normal: StyleBoxFlat = StyleBoxFlat.new()
+	normal.bg_color = base_color.darkened(0.2)
+	normal.set_corner_radius_all(8)
+	normal.set_expand_margin_all(-2)
+	var hover: StyleBoxFlat = normal.duplicate()
+	hover.bg_color = base_color.lightened(0.1)
+	var pressed: StyleBoxFlat = normal.duplicate()
+	pressed.bg_color = base_color.darkened(0.3)
+
+	todo_container = TodoPanel.new()
+	todo_container.init(settings_manager, normal, hover, pressed)
+	outline_parent.add_child(todo_container)
+
 func _update_bookmarks_ui():
 	if not bookmarks_tree or not bookmarks_root:
 		return
@@ -834,30 +1221,23 @@ func _remove_all_bookmarks():
 	_update_bookmarks_ui()
 
 # Drops bookmarks for members that no longer exist in the current script (renamed or deleted).
-func _cleanup_stale_bookmarks() -> void:
-	var script: Script = EditorInterface.get_script_editor().get_current_script()
-	if not script or not outline_cache:
+# Names come from parsing the saved source text, not from the outline's member list: that list
+# leaves out private members when they're hidden, and is empty while the script has a parse
+# error, either of which would wrongly delete bookmarks.
+func _cleanup_stale_bookmarks(script: Script) -> void:
+	if not script or not script.has_source_code():
 		return
-
 	var script_path: String = script.resource_path
 	if script_path.is_empty():
 		return
 
 	var existing: Dictionary = {}
-	for name: String in outline_cache.engine_funcs:
-		existing[name] = true
-	for name: String in outline_cache.funcs:
-		existing[name] = true
-	for name: String in outline_cache.signals:
-		existing[name] = true
-	for name: String in outline_cache.exports:
-		existing[name] = true
-	for name: String in outline_cache.properties:
-		existing[name] = true
-	for name: String in outline_cache.constants:
-		existing[name] = true
-	for name: String in outline_cache.classes:
-		existing[name] = true
+	for symbol: Dictionary in SymbolParser.parse(script.source_code.split("\n")):
+		if symbol[&"parent"] == -1:
+			existing[symbol[&"name"]] = true
+	# Nothing parsed at all (empty file, or the text isn't what we expect): don't delete anything.
+	if existing.is_empty():
+		return
 
 	var changed: bool = false
 	var i: int = 0
@@ -932,6 +1312,7 @@ func navigate_on_tree(event: InputEvent, tree: Tree):
 			tree.get_root().get_first_child().select(0)
 
 var scroll_button_container: HBoxContainer
+var todo_container: TodoPanel
 
 func _update_outline_ui_visibility():
 	if not settings_manager or not outline_tree:
@@ -943,6 +1324,8 @@ func _update_outline_ui_visibility():
 		collapse_button_container.visible = not hidden
 	if bookmarks_container:
 		bookmarks_container.visible = not hidden
+	if todo_container:
+		todo_container.visible = not hidden and settings_manager.show_todos
 	if scroll_button_container:
 		scroll_button_container.visible = not hidden
 	if outline_filter_txt:
@@ -955,6 +1338,7 @@ func _add_collapse_buttons():
 		collapse_button_container.free()
 
 	collapse_button_container = HBoxContainer.new()
+	collapse_button_container.name = &"QuillOutlineCollapse"
 	collapse_button_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	collapse_button_container.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	collapse_button_container.custom_minimum_size.y = 28
@@ -1009,6 +1393,7 @@ func _add_scroll_buttons():
 		scroll_button_container.free()
 
 	scroll_button_container = HBoxContainer.new()
+	scroll_button_container.name = &"QuillOutlineScroll"
 	scroll_button_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll_button_container.size_flags_vertical = Control.SIZE_FILL
 	scroll_button_container.custom_minimum_size.y = 60
@@ -1101,14 +1486,14 @@ func _scroll_to_bottom():
 # 4.8 replaced the members ItemList with a DocumentOutline (filter row + a Tree).
 # Before that it was the second ItemList, right after the script list.
 func _find_native_outline() -> Control:
-	var trees: Array[Node] = outline_container.find_children("*", "Tree", true, false)
-	if not trees.is_empty():
-		return trees[0]
+	for tree: Node in outline_container.find_children("*", "Tree", true, false):
+		if not String(tree.name).begins_with(STALE_NODE_PREFIX):
+			return tree
 	return find_or_null(outline_container.find_children("*", "ItemList", true, false), 1)
 
+# Missing nodes are reported once by the plugin as a toast, so no error here.
 func find_or_null(arr: Array[Node], index: int = 0) -> Node:
 	if index >= arr.size():
-		push_error("Required node not found for Script-IDE Outline Manager")
 		return null
 	return arr[index]
 

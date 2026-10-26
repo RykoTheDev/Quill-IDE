@@ -11,6 +11,8 @@ const MINIMALISM: StringName = GENERAL + &"minimalism"
 const SCRIPT_LIST_VISIBLE: StringName = GENERAL + &"script_list_visible"
 const SCRIPT_TABS_VISIBLE: StringName = GENERAL + &"script_tabs_visible"
 const SHOW_BREADCRUMBS: StringName = GENERAL + &"show_breadcrumbs"
+# Whether project-wide scans (TODOs) also look inside res://addons.
+const SCAN_ADDONS: StringName = GENERAL + &"scan_addons"
 
 const OUTLINE: StringName = GODOT_IDE + &"Outline/"
 const OUTLINE_ORDER: StringName = OUTLINE + &"outline_order"
@@ -26,6 +28,7 @@ const OUTLINE_COLLAPSED: StringName = OUTLINE + &"outline_collapsed"
 const OUTLINE_BOOKMARKS: StringName = OUTLINE + &"outline_bookmarks"
 const HIDE_OUTLINE_PANEL: StringName = OUTLINE + &"hide_outline_panel"
 const OUTLINE_FOLLOW_CURSOR: StringName = OUTLINE + &"follow_cursor"
+const SHOW_TODOS: StringName = OUTLINE + &"show_todos"
 
 var is_outline_right: bool = true
 var is_script_list_visible: bool = false
@@ -38,6 +41,8 @@ var is_outline_hidden: bool = false
 var is_script_tabs_top: bool = true
 var show_breadcrumbs: bool = true
 var is_outline_follow_cursor: bool = true
+var scan_addons: bool = false
+var show_todos: bool = true
 var outline_order: PackedStringArray
 
 var suppress_settings_sync: bool = false
@@ -63,6 +68,8 @@ func init_settings():
 	is_outline_hidden = get_setting(HIDE_OUTLINE_PANEL, is_outline_hidden)
 	show_breadcrumbs = get_setting(SHOW_BREADCRUMBS, show_breadcrumbs)
 	is_outline_follow_cursor = get_setting(OUTLINE_FOLLOW_CURSOR, is_outline_follow_cursor)
+	scan_addons = get_setting(SCAN_ADDONS, scan_addons)
+	show_todos = get_setting(SHOW_TODOS, show_todos)
 	init_outline_order()
 	collapsed_categories = load_collapsed_categories()
 	bookmarks = load_bookmarks()
@@ -90,7 +97,7 @@ func sync_settings(changed_settings: PackedStringArray):
 	for setting: String in changed_settings:
 		if !setting.begins_with(GODOT_IDE): continue
 
-		match setting:
+		match StringName(setting):
 			OUTLINE_COLLAPSED: collapsed_categories = load_collapsed_categories()
 			OUTLINE_ORDER: init_outline_order()
 			OUTLINE_POSITION_RIGHT: is_outline_right = get_setting(setting, is_outline_right)
@@ -103,6 +110,8 @@ func sync_settings(changed_settings: PackedStringArray):
 			HIDE_OUTLINE_PANEL: is_outline_hidden = get_setting(setting, is_outline_hidden)
 			SHOW_BREADCRUMBS: show_breadcrumbs = get_setting(setting, show_breadcrumbs)
 			OUTLINE_FOLLOW_CURSOR: is_outline_follow_cursor = get_setting(setting, is_outline_follow_cursor)
+			SCAN_ADDONS: scan_addons = get_setting(setting, scan_addons)
+			SHOW_TODOS: show_todos = get_setting(setting, show_todos)
 			SHOW_FUNCS: show_funcs = get_setting(setting, show_funcs)
 			SHOW_SIGNALS: show_signals = get_setting(setting, show_signals)
 			SHOW_CONSTANTS: show_constants = get_setting(setting, show_constants)
@@ -124,6 +133,8 @@ func sync_settings_all():
 	is_outline_hidden = get_setting(HIDE_OUTLINE_PANEL, is_outline_hidden)
 	show_breadcrumbs = get_setting(SHOW_BREADCRUMBS, show_breadcrumbs)
 	is_outline_follow_cursor = get_setting(OUTLINE_FOLLOW_CURSOR, is_outline_follow_cursor)
+	scan_addons = get_setting(SCAN_ADDONS, scan_addons)
+	show_todos = get_setting(SHOW_TODOS, show_todos)
 	init_outline_order()
 	collapsed_categories = load_collapsed_categories()
 	bookmarks = load_bookmarks()
@@ -199,7 +210,7 @@ func _persist_collapsed_categories():
 func load_bookmarks() -> Array:
 	var editor_settings: EditorSettings = get_editor_settings()
 	if editor_settings.has_setting(OUTLINE_BOOKMARKS):
-		return editor_settings.get_setting(OUTLINE_BOOKMARKS)
+		return editor_settings.get_setting(OUTLINE_BOOKMARKS).duplicate(true)
 	else:
 		editor_settings.set_setting(OUTLINE_BOOKMARKS, [])
 		return []
@@ -264,7 +275,7 @@ func clear_all_bookmarks() -> void:
 
 func _persist_bookmarks() -> void:
 	suppress_settings_sync = true
-	get_editor_settings().set_setting(OUTLINE_BOOKMARKS, bookmarks)
+	get_editor_settings().set_setting(OUTLINE_BOOKMARKS, bookmarks.duplicate(true))
 	suppress_settings_sync = false
 
 func is_sorted() -> bool:

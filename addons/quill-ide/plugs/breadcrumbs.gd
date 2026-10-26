@@ -9,12 +9,15 @@ signal top_level_symbol_changed(symbol_name: String)
 const REPARSE_DELAY: float = 0.3
 const SEPARATOR: String = "›"
 
-const KIND_FUNC: StringName = &"func"
-const KIND_CLASS: StringName = &"class"
-const KIND_VAR: StringName = &"var"
-const KIND_CONST: StringName = &"const"
-const KIND_SIGNAL: StringName = &"signal"
-const KIND_ENUM: StringName = &"enum"
+const SymbolParser = preload("res://addons/quill-ide/plugs/symbol_parser.gd")
+
+const KIND_FUNC: StringName = SymbolParser.KIND_FUNC
+const KIND_CLASS: StringName = SymbolParser.KIND_CLASS
+const KIND_CLASS_NAME: StringName = SymbolParser.KIND_CLASS_NAME
+const KIND_VAR: StringName = SymbolParser.KIND_VAR
+const KIND_CONST: StringName = SymbolParser.KIND_CONST
+const KIND_SIGNAL: StringName = SymbolParser.KIND_SIGNAL
+const KIND_ENUM: StringName = SymbolParser.KIND_ENUM
 
 var settings_manager: QuillSettingsManager
 var icon_manager: IconManager
@@ -32,9 +35,6 @@ var top_level_name: String = ""
 var popup_symbols: Array[int] = []
 var refresh_queued: bool = false
 
-var symbol_regex: RegEx = RegEx.create_from_string(
-	"^((?:@[\\w.]+(?:\\(.*?\\))?\\s+)*)(?:static\\s+)?(func|class|var|const|signal|enum)\\s+([A-Za-z_]\\w*)")
-
 func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager) -> bool:
 	settings_manager = settings_mgr
 	icon_manager = icon_mgr
@@ -43,9 +43,14 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager) -> bool:
 	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
 	var containers: Array[Node] = script_editor.find_children("*", "TabContainer", true, false)
 	if containers.is_empty() or not containers[0].get_parent() is VBoxContainer:
-		push_error("Required node not found for Quill breadcrumbs")
 		return false
 	tab_container = containers[0]
+
+	# A previous instance that never got to clean up (script reload, crash) may have left its bar.
+	var stale: Node = tab_container.get_parent().get_node_or_null(NodePath(name))
+	if stale:
+		stale.get_parent().remove_child(stale)
+		stale.queue_free()
 
 	clip_contents = true
 	add_theme_constant_override(&"separation", 0)
@@ -68,7 +73,8 @@ func init(settings_mgr: QuillSettingsManager, icon_mgr: IconManager) -> bool:
 	host.add_child(self)
 	host.move_child(self, tab_container.get_index() + 1)
 
-	script_editor.editor_script_changed.connect(_on_active_script_changed)
+	if not script_editor.editor_script_changed.is_connected(_on_active_script_changed):
+		script_editor.editor_script_changed.connect(_on_active_script_changed)
 	_on_active_script_changed(null)
 	return true
 
@@ -79,7 +85,8 @@ func cleanup():
 	_detach_code_edit()
 	if get_parent():
 		get_parent().remove_child(self)
-	queue_free()
+	if not is_queued_for_deletion():
+		queue_free()
 
 func handle_settings_change():
 	_rebuild_crumbs()
@@ -121,7 +128,7 @@ func _is_gdscript_open() -> bool:
 func _reparse():
 	symbols.clear()
 	if _is_gdscript_open():
-		_parse_symbols()
+		symbols = SymbolParser.parse(code_edit.text.split("\n"), code_edit.indent_size)
 	_refresh(true)
 
 func _queue_refresh():
@@ -146,72 +153,6 @@ func _refresh(force: bool = false):
 		top_level_symbol_changed.emit(top)
 
 #region Parsing
-# Scopes come from indentation: a symbol runs until the next code line at its indent or less.
-# Comments, blank lines, multiline strings and lines starting with ) ] } don't count, so a
-# dict closing on column 0 doesn't end its const early.
-func _parse_symbols():
-	var indent_size: int = code_edit.indent_size
-	var stack: Array[int] = []
-	var last_code_line: int = -1
-	var in_multiline_string: bool = false
-	var pending_annotations: String = ""
-
-	for i: int in code_edit.get_line_count():
-		var line: String = code_edit.get_line(i)
-		var stripped: String = line.strip_edges()
-		var quote_count: int = stripped.count("\"\"\"") + stripped.count("'''")
-
-		if in_multiline_string:
-			if quote_count % 2 == 1:
-				in_multiline_string = false
-				last_code_line = i
-			continue
-		if stripped.is_empty() or stripped.begins_with("#"):
-			continue
-
-		var indent: int = _indent_width(line, indent_size)
-		if not stripped[0] in ")]}":
-			while not stack.is_empty() and indent <= symbols[stack.back()][&"indent"]:
-				symbols[stack.pop_back()][&"end_line"] = last_code_line
-
-		var result: RegExMatch = symbol_regex.search(stripped)
-		if result:
-			var annotations: String = pending_annotations + " " + result.get_string(1)
-			symbols.append({
-				&"name": result.get_string(3),
-				&"kind": StringName(result.get_string(2)),
-				&"line": i,
-				&"end_line": i,
-				&"indent": indent,
-				&"exported": annotations.contains("@export"),
-				&"parent": stack.back() if not stack.is_empty() else -1,
-			})
-			stack.push_back(symbols.size() - 1)
-			pending_annotations = ""
-		elif stripped.begins_with("@"):
-			# Annotation on its own line, e.g. @export above a var. Hang on to it for the next symbol.
-			pending_annotations += " " + stripped
-		else:
-			pending_annotations = ""
-
-		last_code_line = i
-		if quote_count % 2 == 1:
-			in_multiline_string = true
-
-	for index: int in stack:
-		symbols[index][&"end_line"] = last_code_line
-
-func _indent_width(line: String, indent_size: int) -> int:
-	var width: int = 0
-	for c: String in line:
-		if c == "\t":
-			width += indent_size
-		elif c == " ":
-			width += 1
-		else:
-			break
-	return width
-
 func _chain_at_line(line: int) -> Array[int]:
 	# Nested symbols start after their parents, so the last symbol containing the line is the innermost.
 	var innermost: int = -1
@@ -267,7 +208,7 @@ func _add_crumb(text: String, icon: Texture2D, sibling_parent: int, symbol_index
 func _get_symbol_icon(symbol: Dictionary) -> Texture2D:
 	match symbol[&"kind"]:
 		KIND_FUNC: return icon_manager.get_func_icon(symbol[&"name"])
-		KIND_CLASS: return icon_manager.class_icon
+		KIND_CLASS, KIND_CLASS_NAME: return icon_manager.class_icon
 		KIND_SIGNAL: return icon_manager.signal_icon
 		KIND_CONST, KIND_ENUM: return icon_manager.constant_icon
 		KIND_VAR: return icon_manager.export_icon if symbol[&"exported"] else icon_manager.property_icon

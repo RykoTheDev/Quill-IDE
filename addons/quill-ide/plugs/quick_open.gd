@@ -7,6 +7,13 @@ const SEPARATOR: StringName = &" - "
 const STRUCTURE_START: StringName = &"("
 const STRUCTURE_END: StringName = &")"
 
+const SymbolParser = preload("res://addons/quill-ide/plugs/symbol_parser.gd")
+const ProjectFiles = preload("res://addons/quill-ide/plugs/project_files.gd")
+
+# Typing this first switches from files to symbols across all scripts.
+const SYMBOL_PREFIX: String = "@"
+const MAX_SYMBOL_RESULTS: int = 200
+
 const ORDER: Dictionary[StringName, int] = {
 	&"PackedScene": 0,
 	&"GDScript": 1,
@@ -34,6 +41,10 @@ var others: Array[FileData]
 var all_files: Array[FileData]
 
 var is_rebuild_cache: bool = true
+
+# Built the first time you type @ after the popup opens, so it's fresh but not rebuilt per key.
+var symbols: Array[SymbolData] = []
+var symbols_dirty: bool = true
 
 
 func _ready() -> void:
@@ -66,6 +77,7 @@ func _ready() -> void:
 	file_system.filesystem_changed.connect(schedule_rebuild)
 
 	filter_txt.gui_input.connect(navigate_in_files_list)
+	filter_txt.placeholder_text = "Search files, or start with %s to search symbols" % SYMBOL_PREFIX
 
 func load_show_addons_setting() -> int:
 	if (plugin != null and plugin.has_meta(&"quick_open_show_addons")):
@@ -117,7 +129,14 @@ func set_category(category: Category):
 	focus_and_select_first()
 
 func open_file(index: int):
-	var file: String = files_list.get_item_metadata(index)
+	var metadata: Variant = files_list.get_item_metadata(index)
+	if (metadata == null):
+		return
+	if (metadata is Dictionary):
+		open_symbol(metadata)
+		return
+
+	var file: String = metadata
 	if (plugin != null && plugin.navigation_history != null):
 		plugin.navigation_history.record_recent_file(file)
 
@@ -148,6 +167,7 @@ func schedule_rebuild():
 
 func on_show():
 	search_option_btn.selected = load_show_addons_setting()
+	symbols_dirty = true
 
 	if (is_rebuild_cache):
 		rebuild_cache()
@@ -167,6 +187,7 @@ func rebuild_cache():
 	build_file_cache()
 
 func rebuild_cache_and_ui():
+	symbols_dirty = true
 	rebuild_cache()
 	fill_files_list()
 
@@ -243,6 +264,10 @@ func change_fill_files_list():
 
 func fill_files_list():
 	files_list.clear()
+
+	if (filter_txt.text.begins_with(SYMBOL_PREFIX)):
+		fill_symbols_list(filter_txt.text.substr(SYMBOL_PREFIX.length()).strip_edges())
+		return
 
 	if (filter_bar.current_tab == 0):
 		fill_files_list_with(all_files, sort_by_order_filter)
@@ -328,6 +353,110 @@ func sort_by_filter(file_data1: FileData, file_data2: FileData) -> bool:
 			return false
 
 	return name1 < name2
+
+#region Symbols
+func rebuild_symbols():
+	symbols_dirty = false
+	symbols.clear()
+
+	var include_addons: bool = search_option_btn.get_selected_id() == 1
+	for path: String in ProjectFiles.find_files(["gd"], include_addons):
+		var parsed: Array[Dictionary] = SymbolParser.parse(ProjectFiles.read_lines(path))
+		for symbol: Dictionary in parsed:
+			# Skip locals: anything declared inside a function body.
+			var parent: int = symbol[&"parent"]
+			if (parent != -1 && parsed[parent][&"kind"] == SymbolParser.KIND_FUNC):
+				continue
+
+			var data: SymbolData = SymbolData.new()
+			data.name = symbol[&"name"]
+			data.kind = symbol[&"kind"]
+			data.exported = symbol[&"exported"]
+			data.path = path
+			data.line = symbol[&"line"]
+			data.owner_name = parsed[parent][&"name"] if parent != -1 else ""
+			symbols.append(data)
+
+func fill_symbols_list(query: String):
+	if (symbols_dirty):
+		rebuild_symbols()
+
+	var lower_query: String = query.to_lower()
+	var matches: Array[SymbolData] = []
+	for data: SymbolData in symbols:
+		data.score = score_symbol(data.name.to_lower(), lower_query)
+		if (data.score > 0):
+			matches.append(data)
+
+	# Best match first, then shorter names, then alphabetical.
+	matches.sort_custom(func(a: SymbolData, b: SymbolData) -> bool:
+		if (a.score != b.score):
+			return a.score > b.score
+		if (a.name.length() != b.name.length()):
+			return a.name.length() < b.name.length()
+		return a.name.naturalnocasecmp_to(b.name) < 0)
+
+	for i: int in mini(matches.size(), MAX_SYMBOL_RESULTS):
+		var data: SymbolData = matches[i]
+		var label: String = data.name + ("()" if data.kind == SymbolParser.KIND_FUNC else "")
+		if (!data.owner_name.is_empty()):
+			label = data.owner_name + "." + label
+		label += SEPARATOR + data.path.get_file() + ":" + str(data.line + 1)
+
+		files_list.add_item(label, get_symbol_icon(data))
+		files_list.set_item_metadata(files_list.item_count - 1, { &"path": data.path, &"line": data.line })
+		files_list.set_item_tooltip(files_list.item_count - 1, "%s %s\n%s:%d" % [data.kind, data.name, data.path, data.line + 1])
+
+	if (matches.size() > MAX_SYMBOL_RESULTS):
+		files_list.add_item("... %d more, keep typing to narrow it down" % (matches.size() - MAX_SYMBOL_RESULTS))
+		files_list.set_item_disabled(files_list.item_count - 1, true)
+		files_list.set_item_selectable(files_list.item_count - 1, false)
+
+# 3 = name starts with the query, 2 = contains it, 1 = letters in order (fuzzy), 0 = no match.
+func score_symbol(lower_name: String, lower_query: String) -> int:
+	if (lower_query.is_empty()):
+		return 1
+	if (lower_name.begins_with(lower_query)):
+		return 3
+	if (lower_name.contains(lower_query)):
+		return 2
+	if (lower_query.is_subsequence_of(lower_name)):
+		return 1
+	return 0
+
+func get_symbol_icon(data: SymbolData) -> Texture2D:
+	var icons: IconManager = plugin.icon_manager if plugin != null else null
+	if (icons == null):
+		return null
+	if (data.kind == SymbolParser.KIND_FUNC):
+		return icons.get_func_icon(data.name)
+	elif (data.kind == SymbolParser.KIND_SIGNAL):
+		return icons.signal_icon
+	elif (data.kind == SymbolParser.KIND_CLASS || data.kind == SymbolParser.KIND_CLASS_NAME):
+		return icons.class_icon
+	elif (data.kind == SymbolParser.KIND_CONST || data.kind == SymbolParser.KIND_ENUM):
+		return icons.constant_icon
+	elif (data.kind == SymbolParser.KIND_VAR):
+		return icons.export_icon if data.exported else icons.property_icon
+	return null
+
+func open_symbol(metadata: Dictionary):
+	var path: String = metadata[&"path"]
+	if (plugin != null && plugin.navigation_history != null):
+		plugin.navigation_history.record_recent_file(path)
+	ProjectFiles.open_script_at(path, metadata[&"line"])
+	hide.call_deferred()
+#endregion
+
+class SymbolData:
+	var name: String
+	var kind: StringName
+	var exported: bool
+	var path: String
+	var line: int
+	# Enclosing inner class, if any.
+	var owner_name: String
+	var score: int
 
 class FileData:
 	var file: String

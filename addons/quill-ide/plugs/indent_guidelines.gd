@@ -7,6 +7,11 @@ const SETTINGS_VERSION: StringName = &"Quill/_indent_version"
 
 # General
 const GUIDELINES_DRAW: StringName = SETTINGS_ROOT + &"general/draw"
+# Keep Godot's "Draw Tabs" markers visible alongside the guides (they're hidden otherwise).
+const GUIDELINES_SHOW_TAB_MARKERS: StringName = SETTINGS_ROOT + &"general/show_tab_markers"
+
+# Godot's own setting. We never change it; we only override it per editor while guides are drawn.
+const GODOT_DRAW_TABS: StringName = &"text_editor/appearance/whitespace/draw_tabs"
 
 # Appearance
 const GUIDELINES_COLOR: StringName = SETTINGS_ROOT + &"appearance/color"
@@ -16,12 +21,15 @@ const GUIDELINES_DRAW_SIDE: StringName = SETTINGS_ROOT + &"appearance/draw_side"
 const GUIDELINES_WIDTH: StringName = SETTINGS_ROOT + &"appearance/width"
 const GUIDELINES_Y_OFFSET: StringName = SETTINGS_ROOT + &"appearance/y_offset"
 const GUIDELINES_DRAW_ROOT_GUIDES: StringName = SETTINGS_ROOT + &"appearance/draw_root_guides"
+const GUIDELINES_ACTIVE_WIDTH: StringName = SETTINGS_ROOT + &"appearance/active_width"
 
 # Behavior
 const GUIDELINES_KEEP_CARET: StringName = SETTINGS_ROOT + &"behavior/keep_caret"
 
 # Rainbow
-const RAINBOW_ENABLED: StringName = SETTINGS_ROOT + &"rainbow/enabled"
+const RAINBOW_MODE: StringName = SETTINGS_ROOT + &"rainbow/mode"
+# Replaced by RAINBOW_MODE in settings version 3; only read when migrating.
+const RAINBOW_ENABLED_OLD: StringName = SETTINGS_ROOT + &"rainbow/enabled"
 
 # Foldmarks
 const FOLDMARKS_DRAW: StringName = SETTINGS_ROOT + &"foldmarks/draw"
@@ -36,9 +44,21 @@ const TWEAKS_COMPLETION_MAX_WIDTH: StringName = SETTINGS_ROOT + &"tweaks/complet
 
 enum GuidelinesStyle { LINE, LINE_CLOSE }
 enum GuidelinesOffset { LEFT = 0, MIDDLE, RIGHT }
+enum RainbowMode { OFF, KEYWORD, DEPTH }
+
+# Cycled through by nesting depth in RainbowMode.DEPTH.
+const DEPTH_COLORS: Array[Color] = [
+	Color(0.95, 0.75, 0.3),
+	Color(0.85, 0.45, 0.85),
+	Color(0.35, 0.7, 1.0),
+	Color(0.4, 0.9, 0.55),
+	Color(1.0, 0.5, 0.45),
+	Color(0.4, 0.9, 0.9),
+]
 
 
 var draw_guidelines: bool = true
+var show_tab_markers: bool = false
 var guideline_color: Color = Color(0.8, 0.8, 0.8, 0.3)
 var guideline_active_color: Color = Color(0.8, 0.8, 0.8, 0.55)
 var guidelines_style: GuidelinesStyle = GuidelinesStyle.LINE_CLOSE
@@ -47,6 +67,7 @@ var guideline_width: float = 1.0
 var guideline_keep_caret: bool = true
 var guideline_y_offset: float
 var guideline_draw_root_guides: bool = false
+var guideline_active_width: float = 2.0
 
 var draw_foldmarks: bool = false
 var foldmark_color: Color = Color(0.9, 0.9, 0.9, 0.9)
@@ -56,7 +77,7 @@ var foldmark_y_offset: float
 
 var tweak_completion_lines: int = 7
 var tweak_completion_max_width: int = 50
-var rainbow_enabled: bool = false
+var rainbow_mode: RainbowMode = RainbowMode.OFF
 
 
 var ids_code_edits: Array[int]
@@ -78,12 +99,21 @@ func init() -> void:
 	var on_script_changed: Signal = script_editor.editor_script_changed
 	if not on_script_changed.is_connected(_editor_script_changed):
 		on_script_changed.connect(_editor_script_changed)
-		on_script_changed.emit(script_editor.get_current_script())
+	# Call it directly; emitting the editor's signal would also poke every other listener.
+	_editor_script_changed(script_editor.get_current_script())
 
+# Safe to call more than once.
 func cleanup() -> void:
+	var script_editor: ScriptEditor = EditorInterface.get_script_editor()
+	if script_editor.editor_script_changed.is_connected(_editor_script_changed):
+		script_editor.editor_script_changed.disconnect(_editor_script_changed)
+
+	var godot_draw_tabs: bool = EditorInterface.get_editor_settings().get_setting(GODOT_DRAW_TABS)
 	for i: int in len(ids_code_edits):
 		var code_edit: CodeEdit = instance_from_id(ids_code_edits[i])
 		if code_edit != null:
+			# Hand tab markers back to Godot's setting.
+			code_edit.draw_tabs = godot_draw_tabs
 			var id: int = ids_code_edits[i]
 			if bound_draw_callables.has(id):
 				var bound_fn: Callable = bound_draw_callables[id]
@@ -103,6 +133,11 @@ func handle_settings_change(changed_settings: PackedStringArray) -> void:
 		needs_redraw = true
 		_sync_setting(setting)
 
+	# Godot re-applies its own Draw Tabs value to every script editor when settings change, and we
+	# may run before it does. Deferring makes ours land last.
+	if needs_redraw or changed_settings.has(GODOT_DRAW_TABS):
+		_apply_tab_markers_to_all.call_deferred()
+
 	if needs_redraw:
 		for i: int in len(ids_code_edits):
 			var code_edit: CodeEdit = instance_from_id(ids_code_edits[i])
@@ -111,10 +146,22 @@ func handle_settings_change(changed_settings: PackedStringArray) -> void:
 				code_edit.add_theme_constant_override("completion_max_width", tweak_completion_max_width)
 				code_edit.queue_redraw()
 
+# Tab markers and guides mark the same thing, so with guides on, the markers are just noise.
+# Godot's setting still decides when guides are off, or when show_tab_markers asks for both.
+func _apply_tab_markers(code_edit: CodeEdit) -> void:
+	var godot_draw_tabs: bool = EditorInterface.get_editor_settings().get_setting(GODOT_DRAW_TABS)
+	code_edit.draw_tabs = godot_draw_tabs and (show_tab_markers or not draw_guidelines)
+
+func _apply_tab_markers_to_all() -> void:
+	for id: int in ids_code_edits:
+		var code_edit: CodeEdit = instance_from_id(id) as CodeEdit
+		if code_edit != null:
+			_apply_tab_markers(code_edit)
+
 func _register_settings() -> void:
 	var editor_settings: EditorSettings = EditorInterface.get_editor_settings()
 
-	var current_version: int = 2
+	var current_version: int = 3
 	var stored_version: int = editor_settings.get_setting(SETTINGS_VERSION) if editor_settings.has_setting(SETTINGS_VERSION) else 0
 
 	if stored_version < current_version:
@@ -122,6 +169,7 @@ func _register_settings() -> void:
 		editor_settings.set_setting(SETTINGS_VERSION, current_version)
 
 	_register_setting(editor_settings, GUIDELINES_DRAW, draw_guidelines, TYPE_BOOL)
+	_register_setting(editor_settings, GUIDELINES_SHOW_TAB_MARKERS, show_tab_markers, TYPE_BOOL)
 
 	_register_setting(editor_settings, GUIDELINES_COLOR, guideline_color, TYPE_COLOR)
 	_register_setting(editor_settings, GUIDELINES_ACTIVE_COLOR, guideline_active_color, TYPE_COLOR)
@@ -130,10 +178,11 @@ func _register_settings() -> void:
 	_register_setting(editor_settings, GUIDELINES_WIDTH, guideline_width, TYPE_FLOAT, PROPERTY_HINT_RANGE, "0.5,5.0,0.5")
 	_register_setting(editor_settings, GUIDELINES_Y_OFFSET, guideline_y_offset, TYPE_FLOAT, PROPERTY_HINT_RANGE, "-10,10,0.5")
 	_register_setting(editor_settings, GUIDELINES_DRAW_ROOT_GUIDES, guideline_draw_root_guides, TYPE_BOOL)
+	_register_setting(editor_settings, GUIDELINES_ACTIVE_WIDTH, guideline_active_width, TYPE_FLOAT, PROPERTY_HINT_RANGE, "0.5,6.0,0.5")
 
 	_register_setting(editor_settings, GUIDELINES_KEEP_CARET, guideline_keep_caret, TYPE_BOOL)
 
-	_register_setting(editor_settings, RAINBOW_ENABLED, rainbow_enabled, TYPE_BOOL)
+	_register_setting(editor_settings, RAINBOW_MODE, rainbow_mode, TYPE_INT, PROPERTY_HINT_ENUM, "Off, By keyword, By depth")
 
 	_register_setting(editor_settings, FOLDMARKS_DRAW, draw_foldmarks, TYPE_BOOL)
 	_register_setting(editor_settings, FOLDMARKS_COLOR, foldmark_color, TYPE_COLOR)
@@ -163,6 +212,13 @@ func _migrate_settings(editor_settings: EditorSettings) -> void:
 			editor_settings.erase(old_path)
 			editor_settings.set_setting(new_path, val)
 
+	# v3: rainbow on/off became a mode, and "on" meant colour by keyword.
+	if editor_settings.has_setting(RAINBOW_ENABLED_OLD):
+		var was_enabled: bool = editor_settings.get_setting(RAINBOW_ENABLED_OLD)
+		editor_settings.erase(RAINBOW_ENABLED_OLD)
+		if not editor_settings.has_setting(RAINBOW_MODE):
+			editor_settings.set_setting(RAINBOW_MODE, RainbowMode.KEYWORD if was_enabled else RainbowMode.OFF)
+
 func _register_setting(editor_settings: EditorSettings, setting_name: StringName, default_value: Variant, type: int, hint: int = PROPERTY_HINT_NONE, hint_string: String = "") -> void:
 	if not editor_settings.has_setting(setting_name):
 		editor_settings.set_setting(setting_name, default_value)
@@ -187,6 +243,7 @@ func _sync_setting(setting_name: StringName) -> void:
 
 	match setting_name:
 		GUIDELINES_DRAW: draw_guidelines = editor_settings.get_setting(setting_name)
+		GUIDELINES_SHOW_TAB_MARKERS: show_tab_markers = editor_settings.get_setting(setting_name)
 		GUIDELINES_COLOR: guideline_color = editor_settings.get_setting(setting_name)
 		GUIDELINES_ACTIVE_COLOR: guideline_active_color = editor_settings.get_setting(setting_name)
 		GUIDELINES_STYLE: guidelines_style = editor_settings.get_setting(setting_name)
@@ -195,6 +252,7 @@ func _sync_setting(setting_name: StringName) -> void:
 		GUIDELINES_KEEP_CARET: guideline_keep_caret = editor_settings.get_setting(setting_name)
 		GUIDELINES_Y_OFFSET: guideline_y_offset = editor_settings.get_setting(setting_name)
 		GUIDELINES_DRAW_ROOT_GUIDES: guideline_draw_root_guides = editor_settings.get_setting(setting_name)
+		GUIDELINES_ACTIVE_WIDTH: guideline_active_width = editor_settings.get_setting(setting_name)
 		FOLDMARKS_DRAW: draw_foldmarks = editor_settings.get_setting(setting_name)
 		FOLDMARKS_COLOR: foldmark_color = editor_settings.get_setting(setting_name)
 		FOLDMARKS_WIDTH: foldmark_width = editor_settings.get_setting(setting_name)
@@ -202,7 +260,7 @@ func _sync_setting(setting_name: StringName) -> void:
 		FOLDMARKS_Y_OFFSET: foldmark_y_offset = editor_settings.get_setting(setting_name)
 		TWEAKS_COMPLETION_LINES: tweak_completion_lines = editor_settings.get_setting(setting_name)
 		TWEAKS_COMPLETION_MAX_WIDTH: tweak_completion_max_width = editor_settings.get_setting(setting_name)
-		RAINBOW_ENABLED: rainbow_enabled = editor_settings.get_setting(setting_name)
+		RAINBOW_MODE: rainbow_mode = editor_settings.get_setting(setting_name)
 
 
 func scaled(p_val: float) -> float:
@@ -323,6 +381,8 @@ func _editor_script_changed(_s: Script) -> void:
 	for i: int in range(len(ids_code_edits) - 1, -1, -1):
 		var id: int = ids_code_edits[i]
 		if instance_from_id(id) == null:
+			if rids_code_edits[i].is_valid():
+				RenderingServer.free_rid(rids_code_edits[i])
 			ids_code_edits.remove_at(i)
 			rids_code_edits.remove_at(i)
 			bound_draw_callables.erase(id)
@@ -343,6 +403,7 @@ func _editor_script_changed(_s: Script) -> void:
 	var bound_fn: Callable = _draw_appendix.bind(code_edit, draw_rid)
 	bound_draw_callables[instance_id] = bound_fn
 	code_edit.draw.connect(bound_fn)
+	_apply_tab_markers(code_edit)
 	code_edit.queue_redraw()
 
 # The current CodeEdit, or null if there isn't one or we've already hooked it.
@@ -379,7 +440,7 @@ func _draw_appendix(code_edit: CodeEdit, draw_rid: RID) -> void:
 	RenderingServer.canvas_item_clear(draw_rid)
 
 	var caret_idx: int = code_edit.get_caret_line()
-	var caret_indent: int = code_edit.get_indent_level(caret_idx)
+	var caret_indent: int = _get_caret_indent(code_edit, caret_idx)
 
 	# Build a bit past the bottom of the view so guides don't pop in while scrolling.
 	var visible_lines_from: int = maxi(code_edit.get_first_visible_line(), 0)
@@ -399,6 +460,24 @@ func _draw_appendix(code_edit: CodeEdit, draw_rid: RID) -> void:
 
 	if draw_foldmarks:
 		_draw_foldmarks(code_edit, draw_rid, foldedlines, xmargin_beg, row_height, vscroll_delta)
+
+# The caret's indent, except on a blank line, where a blank line's indent is 0 and would make the
+# highlight jump around. There we take the deeper of the neighbouring code lines instead.
+func _get_caret_indent(code_edit: CodeEdit, caret_line: int) -> int:
+	if not code_edit.get_line(caret_line).strip_edges().is_empty():
+		return code_edit.get_indent_level(caret_line)
+	var line_count: int = code_edit.get_line_count()
+	var next_indent: int = 0
+	for i: int in range(caret_line + 1, mini(caret_line + 100, line_count)):
+		if not code_edit.get_line(i).strip_edges().is_empty():
+			next_indent = code_edit.get_indent_level(i)
+			break
+	var prev_indent: int = 0
+	for i: int in range(caret_line - 1, maxi(caret_line - 100, -1), -1):
+		if not code_edit.get_line(i).strip_edges().is_empty():
+			prev_indent = code_edit.get_indent_level(i)
+			break
+	return maxi(next_indent, prev_indent)
 
 func _draw_guidelines(code_edit: CodeEdit, draw_rid: RID, output: Array[LineInCodeEditor], _foldedlines: PackedInt32Array,
 		xmargin_beg: int, caret_idx: int, caret_indent: int, indent_size: int, space_width: float,
@@ -439,6 +518,9 @@ func _draw_guidelines(code_edit: CodeEdit, draw_rid: RID, output: Array[LineInCo
 
 	var points: PackedVector2Array
 	var colors: PackedColorArray
+	# The guide of the block the caret is in gets drawn separately, a bit thicker.
+	var active_points: PackedVector2Array
+	var active_colors: PackedColorArray
 	var block_ends: PackedInt32Array
 
 	for line_data: LineInCodeEditor in output:
@@ -449,30 +531,43 @@ func _draw_guidelines(code_edit: CodeEdit, draw_rid: RID, output: Array[LineInCo
 		if _x < xmargin_beg:
 			continue
 
+		var is_active: bool = caret_idx >= line_data.lineno_from and caret_idx <= line_data.lineno_to and caret_indent == line_data.indent + indent_size
 		var color: Color
-		if rainbow_enabled:
-			color = _get_rainbow_color(code_edit, line_data, caret_idx, caret_indent, indent_size)
-		else:
-			color = guideline_color
-			if caret_idx >= line_data.lineno_from and caret_idx <= line_data.lineno_to and caret_indent == line_data.indent + indent_size:
-				color = guideline_active_color
-
+		match rainbow_mode:
+			RainbowMode.KEYWORD:
+				color = _get_rainbow_color(code_edit, line_data, caret_idx, caret_indent, indent_size)
+			RainbowMode.DEPTH:
+				var depth_color: Color = DEPTH_COLORS[(line_data.indent / indent_size) % DEPTH_COLORS.size()]
+				color = Color(depth_color, 0.85 if is_active else 0.35)
+			_:
+				color = guideline_active_color if is_active else guideline_color
 		var line_no: int = line_data.lineno_to
 		# When several blocks close on the same line, stagger the ends so the hooks don't overlap.
 		var offset_y: float = scaled(minf(block_ends.count(line_no) * 2.0, font.get_height(font_size) / 2.0) + 2.0)
 		var point_start: Vector2 = Vector2(_x, row_height * (line_data.start_x - vscroll_delta) + guideline_y_offset)
 		var point_end: Vector2 = point_start + Vector2(0.0, row_height * line_data.height - offset_y + guideline_y_offset)
-		points.append_array([point_start, point_end])
-		colors.append(color)
+		var segments: PackedVector2Array = [point_start, point_end]
 
 		if guidelines_style == GuidelinesStyle.LINE_CLOSE and line_data.close_width > 0:
 			var point_side: Vector2 = point_end + Vector2(line_data.close_width * space_width - guideline_offset, 0.0)
-			points.append_array([point_end, point_side])
-			colors.append(color)
+			segments.append_array([point_end, point_side])
 			block_ends.append(line_no)
+
+		# Packed arrays are copied by value, so append to the real arrays explicitly.
+		for i: int in segments.size() / 2:
+			if is_active:
+				active_colors.append(color)
+			else:
+				colors.append(color)
+		if is_active:
+			active_points.append_array(segments)
+		else:
+			points.append_array(segments)
 
 	if len(points) > 0:
 		RenderingServer.canvas_item_add_multiline(draw_rid, points, colors, guideline_width)
+	if len(active_points) > 0:
+		RenderingServer.canvas_item_add_multiline(draw_rid, active_points, active_colors, guideline_active_width)
 
 func _get_rainbow_color(code_edit: CodeEdit, line_data: LineInCodeEditor, caret_idx: int, caret_indent: int, indent_size: int) -> Color:
 	var in_range: bool = caret_idx >= line_data.lineno_from and caret_idx <= line_data.lineno_to and caret_indent == line_data.indent + indent_size
@@ -527,10 +622,10 @@ func _get_rainbow_color(code_edit: CodeEdit, line_data: LineInCodeEditor, caret_
 
 	if is_active:
 		return Color(
-			mini(base_color.r * 1.6, 1.0),
-			mini(base_color.g * 1.6, 1.0),
-			mini(base_color.b * 1.6, 1.0),
-			mini(base_color.a * 1.8, 0.85)
+			minf(base_color.r * 1.6, 1.0),
+			minf(base_color.g * 1.6, 1.0),
+			minf(base_color.b * 1.6, 1.0),
+			minf(base_color.a * 1.8, 0.85)
 		)
 	else:
 		return Color(base_color.r, base_color.g, base_color.b, 0.35)
